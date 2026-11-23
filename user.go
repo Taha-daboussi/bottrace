@@ -42,6 +42,27 @@ func userDir() string     { return filepath.Join(stateDir(), "user") }
 func sessionPath() string { return filepath.Join(userDir(), "session.json") }
 func peersPath() string   { return filepath.Join(userDir(), "peers.json") }
 func appPath() string     { return filepath.Join(configDir(), "telegram-app") }
+func lockPath() string    { return filepath.Join(userDir(), "rec.lock") }
+
+// lockUser lets one rec -user run at a time: Telegram pushes the updates of a login to one client only, so a second
+// client would miss the bot's messages. The lock lasts as long as the process; the file names the holder.
+func lockUser(who string) (*os.File, error) {
+	f, err := os.OpenFile(lockPath(), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		holder, _ := os.ReadFile(lockPath())
+		f.Close()
+		if errors.Is(err, syscall.EWOULDBLOCK) {
+			return nil, fmt.Errorf("another rec -user runs (%s): Telegram sends the updates of the login to one client only, so wait until it stops", strings.TrimSpace(string(holder)))
+		}
+		return nil, err
+	}
+	_ = f.Truncate(0)
+	_, _ = f.WriteAt([]byte(who+"\n"), 0)
+	return f, nil
+}
 
 type telegramApp struct {
 	id   int
@@ -107,13 +128,13 @@ func secureUserDir() error {
 
 // newTelegram makes the client of the account. It logs nothing, keeps to about 4 calls a second, and waits out a
 // FLOOD_WAIT of at most 2 minutes.
-func newTelegram(app telegramApp, handler telegram.UpdateHandler, onWait func(floodwait.FloodWait)) (*telegram.Client, *floodwait.Waiter) {
+func newTelegram(app telegramApp, store telegram.SessionStorage, handler telegram.UpdateHandler, onWait func(floodwait.FloodWait)) (*telegram.Client, *floodwait.Waiter) {
 	waiter := floodwait.NewWaiter().WithMaxWait(2 * time.Minute).WithMaxRetries(3)
 	if onWait != nil {
 		waiter = waiter.WithCallback(func(_ context.Context, w floodwait.FloodWait) { onWait(w) })
 	}
 	c := telegram.NewClient(app.id, app.hash, telegram.Options{
-		SessionStorage: &tdsession.FileStorage{Path: sessionPath()},
+		SessionStorage: store,
 		UpdateHandler:  handler,
 		Device:         telegram.DeviceConfig{DeviceModel: "bottrace", SystemVersion: runtime.GOOS, AppVersion: "bottrace 1"},
 		Middlewares:    []telegram.Middleware{waiter, ratelimit.New(rate.Every(250*time.Millisecond), 4)},
@@ -134,7 +155,7 @@ func cmdUser(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	client, waiter := newTelegram(app, nil, nil)
+	client, waiter := newTelegram(app, &tdsession.FileStorage{Path: sessionPath()}, nil, nil)
 	run := func(f func(context.Context) error) error {
 		return waiter.Run(ctx, func(ctx context.Context) error { return client.Run(ctx, f) })
 	}
@@ -255,6 +276,29 @@ func (termAuth) SignUp(context.Context) (auth.UserInfo, error) {
 	return auth.UserInfo{}, errors.New("this phone has no Telegram account: bottrace does not sign up")
 }
 
+// memoryCopy reads the session file once and keeps later changes in memory, so a rec run never writes the file that
+// bottrace user login and user status use. Only bottrace user login writes it.
+type memoryCopy struct {
+	mu   sync.Mutex
+	data []byte
+}
+
+func (m *memoryCopy) LoadSession(context.Context) ([]byte, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.data == nil {
+		return nil, tdsession.ErrNotFound
+	}
+	return m.data, nil
+}
+
+func (m *memoryCopy) StoreSession(_ context.Context, data []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.data = append([]byte(nil), data...)
+	return nil
+}
+
 type peer struct {
 	ID         int64 `json:"id"`
 	AccessHash int64 `json:"access_hash"`
@@ -279,6 +323,7 @@ type userClient struct {
 	client *telegram.Client
 	waiter *floodwait.Waiter
 	gaps   *updates.Manager
+	lock   *os.File
 	ctx    context.Context
 	ready  chan struct{}
 	api    *tg.Client
@@ -292,7 +337,8 @@ type userClient struct {
 	fetched map[string]bool
 }
 
-func newUserClient(scrub *scrubber, proxied func(string) bool) (*userClient, error) {
+// newUserClient makes the account side of rec. only, when not empty, keeps the client to those allowlisted bots.
+func newUserClient(scrub *scrubber, proxied func(string) bool, only []string, who string) (*userClient, error) {
 	app, err := loadApp()
 	if err != nil {
 		return nil, err
@@ -304,10 +350,26 @@ func newUserClient(scrub *scrubber, proxied func(string) bool) (*userClient, err
 	if err := secureUserDir(); err != nil {
 		return nil, err
 	}
-	if _, err := os.Stat(sessionPath()); err != nil {
+	if len(only) > 0 {
+		var scoped allowlist
+		for _, n := range only {
+			e, ok := allow.byName(n)
+			if !ok {
+				return nil, fmt.Errorf("@%s is not on the allowlist (%s)", strings.TrimPrefix(n, "@"), allowlistPath())
+			}
+			scoped = append(scoped, e)
+		}
+		allow = scoped
+	}
+	data, err := os.ReadFile(sessionPath())
+	if err != nil {
 		return nil, errors.New("no Telegram login yet: run bottrace user login first")
 	}
-	c := &userClient{scrub: scrub, allow: allow, proxied: proxied, ready: make(chan struct{}),
+	lock, err := lockUser(who)
+	if err != nil {
+		return nil, err
+	}
+	c := &userClient{scrub: scrub, allow: allow, proxied: proxied, lock: lock, ready: make(chan struct{}),
 		peers: loadPeers(), names: map[int64]string{}, seen: map[int]string{}, last: map[string][]json.RawMessage{}, fetched: map[string]bool{}}
 	for name, p := range c.peers {
 		c.names[p.ID] = name
@@ -326,7 +388,7 @@ func newUserClient(scrub *scrubber, proxied func(string) bool) (*userClient, err
 		return nil
 	})
 	gaps := updates.New(updates.Config{Handler: d})
-	c.client, c.waiter = newTelegram(app, gaps, func(w floodwait.FloodWait) {
+	c.client, c.waiter = newTelegram(app, &memoryCopy{data: data}, gaps, func(w floodwait.FloodWait) {
 		c.sess.add(event{Kind: "note", Note: fmt.Sprintf("Telegram asked the account to wait %s (%s)", w.Duration.Round(time.Second), w.Name)})
 	})
 	c.gaps = gaps
@@ -592,8 +654,8 @@ func (c *userClient) waitReady(ctx context.Context) error {
 	}
 }
 
-// pick finds the bot of a user command: the named one, else the only allowlisted bot that sent a message in this
-// session, else the only allowlisted bot behind the proxy.
+// pick finds the bot of a user command: the named one, else the only bot of this run, else the only allowlisted bot
+// that sent a message in this session, else the only allowlisted bot behind the proxy.
 func (c *userClient) pick(name string, write bool, proxyBots []string) (allowEntry, error) {
 	if name != "" {
 		e, ok := c.allow.byName(name)
@@ -613,6 +675,13 @@ func (c *userClient) pick(name string, write bool, proxyBots []string) (allowEnt
 			}
 		}
 		return out
+	}
+	var all []string
+	for _, e := range c.allow {
+		all = append(all, e.Username)
+	}
+	if l := fits(all); len(l) == 1 {
+		return l[0], nil
 	}
 	c.mu.Lock()
 	var active []string

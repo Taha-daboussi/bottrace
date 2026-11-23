@@ -47,6 +47,7 @@ func cmdRec(args []string) error {
 	control := fs.String("control", defaultControl, "control address for tap, send and screen")
 	tunnel := fs.String("tunnel", defaultTunnel, "hosts passed through unopened and unrecorded")
 	withUser := fs.Bool("user", false, "also run the Telegram user client (log in first with bottrace user login)")
+	userBots := fs.String("bot", "", "with -user: record and drive only these allowlisted bots (@a,@b); default all")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -56,7 +57,14 @@ func cmdRec(args []string) error {
 	}
 	p := &proxy{ca: ca, scrub: newScrubber(), bots: newBots(), upstream: newUpstream()}
 	if *withUser {
-		if p.user, err = newUserClient(p.scrub, p.bots.proxied); err != nil {
+		var only []string
+		for _, n := range strings.Split(*userBots, ",") {
+			if n = strings.TrimSpace(n); n != "" {
+				only = append(only, n)
+			}
+		}
+		who := fmt.Sprintf("pid %d, rec -name %q -bot %q, cwd %s, since %s", os.Getpid(), *name, *userBots, cwdOr(), time.Now().Format("15:04:05"))
+		if p.user, err = newUserClient(p.scrub, p.bots.proxied, only, who); err != nil {
 			return err
 		}
 	}
@@ -99,7 +107,11 @@ func cmdRec(args []string) error {
 		go func() { userDone <- p.user.run(userCtx) }()
 		select {
 		case <-p.user.ready:
-			fmt.Printf("User client: logged in as %s, %d chats on the allowlist. Then: bottrace send -user /start · bottrace tap -user \"<button>\"\n", accountName(p.user.self), len(p.user.allow))
+			var names []string
+			for _, e := range p.user.allow {
+				names = append(names, "@"+e.Username)
+			}
+			fmt.Printf("User client: logged in as %s, recording %s. Then: bottrace send -user /start · bottrace tap -user \"<button>\"\n", accountName(p.user.self), strings.Join(names, ", "))
 		case err := <-userDone:
 			return fmt.Errorf("user client: %w", err)
 		case <-sig:
@@ -126,6 +138,11 @@ func cmdRec(args []string) error {
 	return nil
 }
 
+func cwdOr() string {
+	d, _ := os.Getwd()
+	return d
+}
+
 // printLive prints one short line for each user action and bot call, so the terminal shows the session as it goes.
 func (p *proxy) printLive() {
 	c, _ := p.sess.subscribe()
@@ -137,6 +154,9 @@ func (p *proxy) printLive() {
 			status := "ok"
 			if e.Error != "" {
 				status = e.Error
+			}
+			if params, _ := e.Params.(map[string]any); e.Method == "answerCallbackQuery" && str(params["text"]) != "" {
+				status += "  toast: " + str(params["text"])
 			}
 			fmt.Printf("%s  bot   %-22s %5d ms  %s\n", e.T.Format("15:04:05"), e.Method, e.Ms, status)
 		case "http":

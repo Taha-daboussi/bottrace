@@ -91,6 +91,7 @@ Use:
 
 ```sh
 bottrace rec -user                       # proxy + account side, one events.jsonl, one clock
+bottrace rec -user -bot @dawn_test3_ugqr2_bot   # only this bot (one pane, one bot)
 bottrace send -user /start               # sent through Telegram as the account
 bottrace tap -user "Positions"           # real tap: messages.getBotCallbackAnswer
 bottrace screen -user -bot @dawn_test3_ugqr2_bot
@@ -104,6 +105,7 @@ Events: kind `tg_user`, methods `message`, `edit`, `delete` (stream) and `send`,
 
 Safety:
 
+- One `rec -user` at a time: Telegram pushes the updates of a login to one client only (tested: with two runs on one login, only the run that connected last got its bot's replies). A second `rec -user` stops at once and names the run that holds `~/.local/state/bottrace/user/rec.lock`. Use `-bot @name` so a run records only its own bot. A run never writes the session file; only `bottrace user login` does.
 - The session file is the full key to the account. It lives in `~/.local/state/bottrace/user/` (folder 700, files 600; bottrace narrows a wider mode at start), never in a session folder, a page or a log. The gotd logger stays off.
 - About 4 Telegram calls a second at most; a FLOOD_WAIT of up to 2 minutes is waited out and noted in the timeline, a longer one fails the call. The client never marks messages read and never sets the online status. Bot ids and access hashes are cached in `peers.json`, so `contacts.resolveUsername` runs once per bot.
 - Real taps change the bot's state like a person would. Keep to the money rules of the test env.
