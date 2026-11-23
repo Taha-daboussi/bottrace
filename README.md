@@ -67,7 +67,47 @@ The CA key is in `~/.local/state/bottrace/ca-key.pem` (mode 600). It is trusted 
 
 bottrace sits on the bot's `getUpdates`. A queued action ends the waiting long poll at once and is handed to the bot as an update, with a made-up callback query id (`bottrace-N`) or message id (from 1,900,000,000). The bot then works against the real backend and the real chat. Calls that Telegram would refuse for these made-up ids (`answerCallbackQuery`, `deleteMessage`, `setMessageReaction` on them, a reply to them) are answered by bottrace or have the reply removed; the timeline marks them.
 
+The real driver is the user client (next section); this one needs no login and has no Telegram rate limit.
+
 Update ids: the bot sees ids shifted by the number of injected updates, and bottrace maps its offsets back. The shift is kept in `~/.local/state/bottrace/bots/<bot id>.json`, so a bot that outlives a bottrace restart stays in step.
+
+## User client
+
+The injected driver above never reaches Telegram. The user client is a second, real driver: a Telegram account (gotd/td, layer 233) that sees each bot message as the account gets it and taps through Telegram, so the bot's real toast or alert text is recorded. The injected driver stays; the user client works only with `-user`.
+
+One-time setup:
+
+1. Make an app on my.telegram.org with the account. Write `~/.config/bottrace/telegram-app` (mode 600):
+
+   ```
+   api_id=1234567
+   api_hash=0123456789abcdef0123456789abcdef
+   ```
+
+2. List the bot chats in `~/.config/bottrace/chats`, one per line: `@username rw` (stream, send, tap) or `@username ro` (stream only). An id after the mode pins the entry to that bot, so a lookalike with the same name cannot get in (`@cove_trading_bot ro 8495538877`). Only private chats with these bots are recorded; everything else is dropped before it is converted or written.
+3. Run `bottrace user login` in your own terminal. Type the phone, the code from the Telegram app and, if Telegram asks, the two-step password. Do not paste the code into a chat: Telegram blocks a code that was sent in a message. The account gets a "bottrace" device in Settings > Devices.
+
+Use:
+
+```sh
+bottrace rec -user                       # proxy + account side, one events.jsonl, one clock
+bottrace send -user /start               # sent through Telegram as the account
+bottrace tap -user "Positions"           # real tap: messages.getBotCallbackAnswer
+bottrace screen -user -bot @dawn_test3_ugqr2_bot
+bottrace user status                     # account and allowlist
+bottrace user logout                     # ends the session on Telegram and removes the file
+```
+
+`-bot @name` picks the bot when more than one fits. A tap prints the bot's answer (toast, alert or "no toast text"), then each message as the account got it, then the bot's calls when the bot runs behind the proxy. The user client also works with no bot behind the proxy, for example on the staging bot or a reference bot (read only).
+
+Events: kind `tg_user`, methods `message`, `edit`, `delete` (stream) and `send`, `tap` (actions). A received message is stored in the Bot API shape (text, entities with custom emoji ids, `inline_keyboard` with callback data, URL, web app, switch inline, `style` and `icon_custom_emoji_id`, media with `file_unique_id` keys that start with `u:`), so the pages draw it like a bot-side screen. The timeline shows both sides in time order, with an "account side" filter. Screens and `diff` use the bot side; a bot with no bot side in the session gets "as received" screens instead. Message ids differ between the two sides (each account has its own ids in a private chat), so the two sides line up by time, not by id.
+
+Safety:
+
+- The session file is the full key to the account. It lives in `~/.local/state/bottrace/user/` (folder 700, files 600; bottrace narrows a wider mode at start), never in a session folder, a page or a log. The gotd logger stays off.
+- About 4 Telegram calls a second at most; a FLOOD_WAIT of up to 2 minutes is waited out and noted in the timeline, a longer one fails the call. The client never marks messages read and never sets the online status. Bot ids and access hashes are cached in `peers.json`, so `contacts.resolveUsername` runs once per bot.
+- Real taps change the bot's state like a person would. Keep to the money rules of the test env.
+- Messages that the account types in an allowlisted chat from another app (Telegram Web) are recorded too, marked "typed by the account in another app".
 
 ## Not seen
 

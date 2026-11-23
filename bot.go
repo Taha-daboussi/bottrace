@@ -67,6 +67,35 @@ func (bs *bots) pick(chat int64) (*bot, error) {
 	return nil, errors.New("more than one bot: pass -chat")
 }
 
+// claimed says whether a bot behind the proxy already fetches this media key.
+func (bs *bots) claimed(key string) bool {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	for _, b := range bs.all {
+		b.mu.Lock()
+		ok := b.fetched[key]
+		b.mu.Unlock()
+		if ok {
+			return true
+		}
+	}
+	return false
+}
+
+func (bs *bots) usernames() []string {
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	var out []string
+	for _, b := range bs.all {
+		b.mu.Lock()
+		if b.st.Username != "" {
+			out = append(out, b.st.Username)
+		}
+		b.mu.Unlock()
+	}
+	return out
+}
+
 type msgKey struct {
 	chat int64
 	id   int
@@ -353,6 +382,7 @@ type tapRequest struct {
 	Data  string `json:"data"`
 	Label string `json:"label"`
 	Text  string `json:"text"`
+	Bot   string `json:"bot,omitempty"`
 }
 
 // tap queues a button tap on the newest bot message in the chat that has the button.
@@ -363,59 +393,27 @@ func (b *bot) tap(req tapRequest) (*pendingUpdate, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	type hit struct {
-		msg json.RawMessage
-		btn button
-	}
-	var exact, loose []hit
+	var msgs []json.RawMessage
 	for i := len(b.order) - 1; i >= 0; i-- {
 		k := b.order[i]
-		if k.chat != chat || (req.Msg != 0 && k.id != req.Msg) {
-			continue
-		}
-		var m map[string]any
-		if json.Unmarshal(b.msgs[k], &m) != nil {
-			continue
-		}
-		st := fromMessage(m)
-		for _, row := range st.Rows {
-			for _, btn := range row {
-				switch {
-				case req.Data != "" && btn.Data == req.Data:
-					exact = append(exact, hit{b.msgs[k], btn})
-				case req.Data == "" && strings.TrimSpace(btn.Text) == strings.TrimSpace(req.Label):
-					exact = append(exact, hit{b.msgs[k], btn})
-				case req.Data == "" && req.Label != "" && strings.Contains(strings.ToLower(btn.Text), strings.ToLower(req.Label)):
-					loose = append(loose, hit{b.msgs[k], btn})
-				}
-			}
-		}
-		if len(exact) > 0 || len(loose) > 0 {
-			break
+		if k.chat == chat && (req.Msg == 0 || k.id == req.Msg) {
+			msgs = append(msgs, b.msgs[k])
 		}
 	}
-	var h hit
-	switch {
-	case len(exact) > 0:
-		h = exact[0]
-	case len(loose) == 1:
-		h = loose[0]
-	case len(loose) > 1:
-		names := make([]string, len(loose))
-		for i, l := range loose {
-			names[i] = strconv.Quote(l.btn.Text)
-		}
-		return nil, "", fmt.Errorf("%q matches %d buttons: %s", req.Label, len(loose), strings.Join(names, ", "))
-	default:
+	msg, btn, err := findButton(msgs, req)
+	if errors.Is(err, errNoButton) {
 		return nil, "", fmt.Errorf("no button %q on the bot messages bottrace saw in chat %d (bottrace screen shows the newest one)", cmpOr(req.Label, req.Data), chat)
 	}
-	if h.btn.Data == "" {
-		return nil, "", fmt.Errorf("button %q has no callback data: it is a %s button %s", h.btn.Text, h.btn.Kind, h.btn.URL)
+	if err != nil {
+		return nil, "", err
+	}
+	if btn.Data == "" {
+		return nil, "", fmt.Errorf("button %q has no callback data: it is a %s button %s", btn.Text, btn.Kind, btn.URL)
 	}
 	b.st.NextQuery++
 	qid := fmt.Sprintf("bottrace-%d", b.st.NextQuery)
 	user := b.st.Users[chat]
-	msg, data := h.msg, h.btn.Data
+	data := btn.Data
 	b.save()
 	p := &pendingUpdate{done: make(chan struct{}), build: func(id int) json.RawMessage {
 		out, _ := json.Marshal(map[string]any{"update_id": id, "callback_query": map[string]any{
@@ -428,7 +426,7 @@ func (b *bot) tap(req tapRequest) (*pendingUpdate, string, error) {
 	case b.wake <- struct{}{}:
 	default:
 	}
-	return p, h.btn.Text, nil
+	return p, btn.Text, nil
 }
 
 // send queues a text message from the user.
@@ -481,6 +479,53 @@ func (b *bot) newest(chat int64) (map[string]any, error) {
 		}
 	}
 	return nil, fmt.Errorf("no bot message seen in chat %d since bottrace started: send /start (bottrace send /start)", chat)
+}
+
+var errNoButton = errors.New("no such button")
+
+// findButton looks through messages, newest first, for the button that req names: the exact callback data or label
+// on the newest message that has one, else the one button whose label contains the text.
+func findButton(msgs []json.RawMessage, req tapRequest) (json.RawMessage, button, error) {
+	type hit struct {
+		msg json.RawMessage
+		btn button
+	}
+	var exact, loose []hit
+	for _, raw := range msgs {
+		var m map[string]any
+		if json.Unmarshal(raw, &m) != nil {
+			continue
+		}
+		st := fromMessage(m)
+		for _, row := range st.Rows {
+			for _, btn := range row {
+				switch {
+				case req.Data != "" && btn.Data == req.Data:
+					exact = append(exact, hit{raw, btn})
+				case req.Data == "" && strings.TrimSpace(btn.Text) == strings.TrimSpace(req.Label):
+					exact = append(exact, hit{raw, btn})
+				case req.Data == "" && req.Label != "" && strings.Contains(strings.ToLower(btn.Text), strings.ToLower(req.Label)):
+					loose = append(loose, hit{raw, btn})
+				}
+			}
+		}
+		if len(exact) > 0 || len(loose) > 0 {
+			break
+		}
+	}
+	switch {
+	case len(exact) > 0:
+		return exact[0].msg, exact[0].btn, nil
+	case len(loose) == 1:
+		return loose[0].msg, loose[0].btn, nil
+	case len(loose) > 1:
+		names := make([]string, len(loose))
+		for i, l := range loose {
+			names[i] = strconv.Quote(l.btn.Text)
+		}
+		return nil, button{}, fmt.Errorf("%q matches %d buttons: %s", req.Label, len(loose), strings.Join(names, ", "))
+	}
+	return nil, button{}, errNoButton
 }
 
 func cmpOr(a, b string) string {
