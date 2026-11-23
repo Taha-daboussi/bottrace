@@ -1,4 +1,4 @@
-module bottrace
+module github.com/Taha-daboussi/bottrace
 
 go 1.26.0
 
