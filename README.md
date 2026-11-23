@@ -8,9 +8,23 @@ This does not replace the live test in Telegram Web.
 
 ## Install
 
+Needs Go 1.26 or newer.
+
 ```sh
-cd ~/sandbox/DawnTrade/bottrace && go build -o ~/.local/bin/bottrace .
+go install github.com/Taha-daboussi/bottrace@latest    # puts bottrace in $(go env GOPATH)/bin
 ```
+
+From a clone: `go build -o ~/.local/bin/bottrace .`
+
+## Setup for a teammate
+
+Each person sets up bottrace on their own machine, with their own Telegram account. Never copy another person's `~/.config/bottrace/` or `~/.local/state/bottrace/` folder: the session file is the full key to that account.
+
+1. Install bottrace (above) and check that `bottrace` is on your `PATH`.
+2. Proxy only (no login): run `bottrace rec -name first-check`, start your bot with `env $(bottrace env) <your bot run command>`, send it a message, and press Ctrl-C. Open the `index.html` it prints.
+3. User client (real taps, toasts and messages as your account gets them): do the one-time setup in "User client" below: your own app on my.telegram.org, your own `chats` allowlist, and `bottrace user login` in your own terminal.
+4. Open each bot in the allowlist once in Telegram and press Start, so your account has a chat with it.
+5. Check with `bottrace user status`, then record with `bottrace rec -user -bot @<your bot>`.
 
 ## Record a session
 
