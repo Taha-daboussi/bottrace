@@ -64,7 +64,8 @@ pre.plain{background:var(--panel);padding:10px;border-radius:8px;overflow:auto;f
 .tl .lat{color:var(--ok);font-size:12px}
 .tl .lat.slow{color:var(--warn)}
 .filters label{margin-right:12px;font-size:13px;color:var(--muted)}
-body.no-out .out,body.no-tg .tg,body.no-misc .misc{display:none}
+body.no-out .out,body.no-tg .tg,body.no-misc .misc,body.no-usr .usr{display:none}
+.tl .usr:not(.action) .body{border-left:3px solid var(--link);padding-left:8px}
 body.err-only .item:not(.err){display:none}
 body:not(.show-bg) .bg{display:none}
 .cols{display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start}

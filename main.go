@@ -19,6 +19,13 @@ const usage = `bottrace: record, drive and render a Telegram bot session
   bottrace diff <session A> <session B> [-out dir]
       put the screens of two sessions side by side
   bottrace ls                      list the sessions
+
+User client (the real Telegram account; see README "User client"):
+  bottrace user login|status|logout   log the account in one time, show it, end the session
+  bottrace rec -user [-bot @a,@b] ... also record what the allowlisted bot chats get (or only these), as the account got it
+  bottrace send -user [-bot @name] text
+  bottrace tap -user [-bot @name] [-msg id] [-data cb] [label]
+  bottrace screen -user [-bot @name]  the same commands, through the real Telegram
 `
 
 func main() {
@@ -45,6 +52,8 @@ func main() {
 		err = cmdDiff(args)
 	case "ls":
 		err = cmdList()
+	case "user":
+		err = cmdUser(args)
 	case "help", "-h", "--help":
 		fmt.Print(usage)
 	default:

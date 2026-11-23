@@ -26,6 +26,7 @@ type proxy struct {
 	bots     *bots
 	upstream *http.Transport
 	tunnel   []string
+	user     *userClient
 }
 
 func newUpstream() *http.Transport {

@@ -56,6 +56,10 @@ func num(v any) float64 {
 	switch t := v.(type) {
 	case float64:
 		return t
+	case int:
+		return float64(t)
+	case int64:
+		return float64(t)
 	case string:
 		f, _ := strconv.ParseFloat(t, 64)
 		return f
@@ -182,8 +186,18 @@ type limitFlag struct {
 func buildScreens(events []event) ([]screen, map[string]string) {
 	media := mediaIndex(events)
 	states := map[[2]int64]msgState{}
+	botSide := map[string]bool{}
+	for _, e := range events {
+		if e.Kind == "tg_call" && screenMethods[e.Method] {
+			botSide[strings.ToLower(e.Bot)] = true
+		}
+	}
 	var out []screen
 	for _, e := range events {
+		if e.Kind == "tg_user" && (e.Method == "message" || e.Method == "edit") && !botSide[strings.ToLower(e.Bot)] {
+			out = append(out, receivedScreen(e, len(out)+1, media))
+			continue
+		}
 		if e.Kind != "tg_call" || !screenMethods[e.Method] {
 			continue
 		}
@@ -215,6 +229,17 @@ func buildScreens(events []event) ([]screen, map[string]string) {
 		out = append(out, sc)
 	}
 	return out, media
+}
+
+// receivedScreen is a message as the account got it, for a bot that does not run behind the proxy.
+func receivedScreen(e event, n int, media map[string]string) screen {
+	m, _ := e.Result.(map[string]any)
+	st := fromMessage(m)
+	if st.Media != nil {
+		st.Media.Path = media[st.Media.UniqueID]
+	}
+	st.Emoji = media
+	return screen{N: n, Seq: e.Seq, T: e.T, Method: e.Method + " (as received)", Bot: e.Bot, State: st, OK: true, Flags: checkLimits(e, nil, st)}
 }
 
 func mediaIndex(events []event) map[string]string {

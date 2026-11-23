@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -45,6 +46,8 @@ func cmdRec(args []string) error {
 	addr := fs.String("addr", defaultAddr, "proxy address (keep it on 127.0.0.1)")
 	control := fs.String("control", defaultControl, "control address for tap, send and screen")
 	tunnel := fs.String("tunnel", defaultTunnel, "hosts passed through unopened and unrecorded")
+	withUser := fs.Bool("user", false, "also run the Telegram user client (log in first with bottrace user login)")
+	userBots := fs.String("bot", "", "with -user: record and drive only these allowlisted bots (@a,@b); default all")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -52,12 +55,25 @@ func cmdRec(args []string) error {
 	if err != nil {
 		return err
 	}
+	p := &proxy{ca: ca, scrub: newScrubber(), bots: newBots(), upstream: newUpstream()}
+	if *withUser {
+		var only []string
+		for _, n := range strings.Split(*userBots, ",") {
+			if n = strings.TrimSpace(n); n != "" {
+				only = append(only, n)
+			}
+		}
+		who := fmt.Sprintf("pid %d, rec -name %q -bot %q, cwd %s, since %s", os.Getpid(), *name, *userBots, cwdOr(), time.Now().Format("15:04:05"))
+		if p.user, err = newUserClient(p.scrub, p.bots.proxied, only, who); err != nil {
+			return err
+		}
+	}
 	sess, err := newSession(*name)
 	if err != nil {
 		return err
 	}
 	defer sess.close()
-	p := &proxy{ca: ca, sess: sess, scrub: newScrubber(), bots: newBots(), upstream: newUpstream()}
+	p.sess = sess
 	for _, h := range strings.Split(*tunnel, ",") {
 		if h = strings.TrimSpace(h); h != "" {
 			p.tunnel = append(p.tunnel, h)
@@ -83,7 +99,32 @@ func cmdRec(args []string) error {
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	<-sig
+	userCtx, stopUser := context.WithCancel(context.Background())
+	defer stopUser()
+	userDone := make(chan error, 1)
+	if p.user != nil {
+		p.user.sess = sess
+		go func() { userDone <- p.user.run(userCtx) }()
+		select {
+		case <-p.user.ready:
+			var names []string
+			for _, e := range p.user.allow {
+				names = append(names, "@"+e.Username)
+			}
+			fmt.Printf("User client: logged in as %s, recording %s. Then: bottrace send -user /start · bottrace tap -user \"<button>\"\n", accountName(p.user.self), strings.Join(names, ", "))
+		case err := <-userDone:
+			return fmt.Errorf("user client: %w", err)
+		case <-sig:
+			return nil
+		}
+	}
+	select {
+	case <-sig:
+	case err := <-userDone:
+		sess.add(event{Kind: "note", Note: "the user client stopped: " + p.scrub.text(fmt.Sprint(err))})
+		<-sig
+	}
+	stopUser()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	_ = csrv.Shutdown(ctx)
@@ -97,6 +138,11 @@ func cmdRec(args []string) error {
 	return nil
 }
 
+func cwdOr() string {
+	d, _ := os.Getwd()
+	return d
+}
+
 // printLive prints one short line for each user action and bot call, so the terminal shows the session as it goes.
 func (p *proxy) printLive() {
 	c, _ := p.sess.subscribe()
@@ -108,6 +154,9 @@ func (p *proxy) printLive() {
 			status := "ok"
 			if e.Error != "" {
 				status = e.Error
+			}
+			if params, _ := e.Params.(map[string]any); e.Method == "answerCallbackQuery" && str(params["text"]) != "" {
+				status += "  toast: " + str(params["text"])
 			}
 			fmt.Printf("%s  bot   %-22s %5d ms  %s\n", e.T.Format("15:04:05"), e.Method, e.Ms, status)
 		case "http":
@@ -123,8 +172,47 @@ func (p *proxy) printLive() {
 			}
 		case "note":
 			fmt.Printf("%s  note  %s\n", e.T.Format("15:04:05"), e.Note)
+		case "tg_user":
+			fmt.Printf("%s  acct  @%s %s\n", e.T.Format("15:04:05"), e.Bot, accountLine(e))
 		}
 	}
+}
+
+// accountLine is one short line for an event of the user client.
+func accountLine(e event) string {
+	params, _ := e.Params.(map[string]any)
+	res, _ := e.Result.(map[string]any)
+	switch e.Method {
+	case "tap":
+		return fmt.Sprintf("tap %q → %s %d ms", str(params["label"]), answerText(e), e.Ms)
+	case "send":
+		if e.Error != "" {
+			return fmt.Sprintf("send %q → %s", str(params["text"]), e.Error)
+		}
+		return fmt.Sprintf("send %q", str(params["text"]))
+	case "delete":
+		return fmt.Sprintf("deleted %v", params["message_ids"])
+	}
+	return fmt.Sprintf("%s msg %v", e.Method, res["message_id"])
+}
+
+// answerText is the bot's answer to a real tap, as the account saw it.
+func answerText(e event) string {
+	if e.Error != "" {
+		return "error: " + e.Error
+	}
+	res, _ := e.Result.(map[string]any)
+	kind := "toast"
+	if res["alert"] == true {
+		kind = "alert"
+	}
+	switch {
+	case str(res["text"]) != "":
+		return kind + ": " + str(res["text"])
+	case str(res["url"]) != "":
+		return "url: " + str(res["url"])
+	}
+	return "no toast text"
 }
 
 func updateLine(e event) string {
@@ -162,7 +250,103 @@ func (p *proxy) controlMux() http.Handler {
 		st.Text = p.scrub.text(st.Text)
 		fmt.Fprintf(w, "msg %d\n%s", st.ID, textGrid(st, r.URL.Query().Get("data") == "1"))
 	})
+	mux.HandleFunc("POST /user/tap", func(w http.ResponseWriter, r *http.Request) { p.controlUser(w, r, true) })
+	mux.HandleFunc("POST /user/send", func(w http.ResponseWriter, r *http.Request) { p.controlUser(w, r, false) })
+	mux.HandleFunc("GET /user/screen", func(w http.ResponseWriter, r *http.Request) {
+		if p.user == nil {
+			http.Error(w, "rec runs without -user", http.StatusNotFound)
+			return
+		}
+		e, err := p.user.pick(r.URL.Query().Get("bot"), false, p.bots.usernames())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		m, err := p.user.newest(e)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		st := fromMessage(m)
+		st.Text = p.scrub.text(st.Text)
+		fmt.Fprintf(w, "@%s msg %d (as the account got it)\n%s", e.Username, st.ID, textGrid(st, r.URL.Query().Get("data") == "1"))
+	})
 	return mux
+}
+
+// controlUser sends or taps through the real Telegram, then prints the bot's answer, each message as the account
+// got it, and the bot's calls when the bot runs behind the proxy.
+func (p *proxy) controlUser(w http.ResponseWriter, r *http.Request, tap bool) {
+	if p.user == nil {
+		http.Error(w, "rec runs without -user", http.StatusNotFound)
+		return
+	}
+	var req tapRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	if err := p.user.waitReady(ctx); err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	e, err := p.user.pick(req.Bot, true, p.bots.usernames())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	sub, unsub := p.sess.subscribe()
+	defer unsub()
+	var b bytes.Buffer
+	if tap {
+		ev, label, err := p.user.tap(ctx, e, req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		fmt.Fprintf(&b, "→ tapped %q in @%s through Telegram (%d ms)\n%s\n", label, e.Username, ev.Ms, answerText(ev))
+	} else {
+		ev, err := p.user.send(ctx, e, req.Text)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		fmt.Fprintf(&b, "→ sent %q to @%s through Telegram (%d ms)\n", req.Text, e.Username, ev.Ms)
+		if ev.Error != "" {
+			fmt.Fprintf(&b, "error: %s\n", ev.Error)
+		}
+	}
+	got := collectEvents(sub, func(x event) bool {
+		return (x.Kind == "tg_user" && x.Bot == e.Username && x.Method != "tap" && x.Method != "send") ||
+			(x.Kind == "tg_call" && strings.EqualFold(x.Bot, e.Username))
+	})
+	var calls []event
+	for _, x := range got {
+		if x.Kind == "tg_call" {
+			calls = append(calls, x)
+			continue
+		}
+		if x.Method == "delete" {
+			params, _ := x.Params.(map[string]any)
+			fmt.Fprintf(&b, "\ndeleted msg %v\n", params["message_ids"])
+			continue
+		}
+		m, _ := x.Result.(map[string]any)
+		if meta, _ := m["user_meta"].(map[string]any); meta["out"] == true {
+			continue
+		}
+		st := fromMessage(m)
+		fmt.Fprintf(&b, "\n── msg %d as the account got it (%s)\n%s", st.ID, x.Method, textGrid(st, false))
+	}
+	if len(calls) > 0 {
+		fmt.Fprintf(&b, "\n── the bot's calls (bot side)%s", callsText(calls))
+	}
+	if len(got) == 0 {
+		fmt.Fprintf(&b, "\n(no new message from @%s in 20 s)\n", e.Username)
+	}
+	_, _ = w.Write(b.Bytes())
 }
 
 func (p *proxy) controlInject(w http.ResponseWriter, r *http.Request, tap bool) {
@@ -211,6 +395,10 @@ func (p *proxy) controlInject(w http.ResponseWriter, r *http.Request, tap bool) 
 // collectCalls gathers the bot's calls after a user action: up to 20 s for the first one, then until it is quiet
 // for 1.5 s, and 60 s at most.
 func collectCalls(sub <-chan event, botName string) []event {
+	return collectEvents(sub, func(e event) bool { return e.Kind == "tg_call" && e.Bot == botName })
+}
+
+func collectEvents(sub <-chan event, keep func(event) bool) []event {
 	var calls []event
 	first := time.NewTimer(20 * time.Second)
 	defer first.Stop()
@@ -221,7 +409,7 @@ func collectCalls(sub <-chan event, botName string) []event {
 	for {
 		select {
 		case e := <-sub:
-			if e.Kind != "tg_call" || e.Bot != botName {
+			if !keep(e) {
 				continue
 			}
 			calls = append(calls, e)
@@ -288,6 +476,7 @@ func cmdTap(args []string) error {
 	chat := fs.Int64("chat", 0, "chat id (needed only with more than one chat)")
 	msg := fs.Int("msg", 0, "message id (default: the newest message with the button)")
 	data := fs.String("data", "", "tap the button with this callback data")
+	user, bot := userFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -295,12 +484,13 @@ func cmdTap(args []string) error {
 	if label == "" && *data == "" {
 		return errors.New("tap needs a button label or -data")
 	}
-	return post("/tap", tapRequest{Chat: *chat, Msg: *msg, Data: *data, Label: label})
+	return post(controlPath("/tap", *user), tapRequest{Chat: *chat, Msg: *msg, Data: *data, Label: label, Bot: *bot})
 }
 
 func cmdSend(args []string) error {
 	fs := flag.NewFlagSet("send", flag.ContinueOnError)
 	chat := fs.Int64("chat", 0, "chat id (needed only with more than one chat)")
+	user, bot := userFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -308,13 +498,14 @@ func cmdSend(args []string) error {
 	if text == "" {
 		return errors.New("send needs the text")
 	}
-	return post("/send", tapRequest{Chat: *chat, Text: text})
+	return post(controlPath("/send", *user), tapRequest{Chat: *chat, Text: text, Bot: *bot})
 }
 
 func cmdScreen(args []string) error {
 	fs := flag.NewFlagSet("screen", flag.ContinueOnError)
 	chat := fs.Int64("chat", 0, "chat id")
 	data := fs.Bool("data", false, "list the callback data of each button")
+	user, bot := userFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -322,7 +513,10 @@ func cmdScreen(args []string) error {
 	if *data {
 		q += "&data=1"
 	}
-	res, err := http.Get(controlURL("/screen" + q))
+	if *bot != "" {
+		q += "&bot=" + url.QueryEscape(*bot)
+	}
+	res, err := http.Get(controlURL(controlPath("/screen", *user) + q))
 	if err != nil {
 		return fmt.Errorf("is `bottrace rec` running? %w", err)
 	}
@@ -333,6 +527,18 @@ func cmdScreen(args []string) error {
 	}
 	fmt.Print(string(body))
 	return nil
+}
+
+func userFlags(fs *flag.FlagSet) (*bool, *string) {
+	return fs.Bool("user", false, "go through the real Telegram account (rec must run with -user)"),
+		fs.String("bot", "", "the bot of a -user command, as @username (needed only when more than one bot fits)")
+}
+
+func controlPath(path string, user bool) string {
+	if user {
+		return "/user" + path
+	}
+	return path
 }
 
 func post(path string, req tapRequest) error {
