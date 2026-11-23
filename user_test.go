@@ -160,6 +160,10 @@ func TestAllowlist(t *testing.T) {
 }
 
 func TestBotForDropsChatsOffTheList(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	if err := os.MkdirAll(userDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	allow, _ := parseAllowlist("@dawn_test_ugqr2_bot rw\n")
 	c := &userClient{allow: allow, peers: map[string]peer{}, names: map[int64]string{}}
 	other := tg.Entities{Users: map[int64]*tg.User{9: {ID: 9, Username: "random_bot", Bot: true}, 10: {ID: 10, Username: "friend"}}}
