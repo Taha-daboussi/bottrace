@@ -274,7 +274,7 @@ type userClient struct {
 	sess    *session
 	scrub   *scrubber
 	allow   allowlist
-	claimed func(key string) bool
+	proxied func(bot string) bool
 
 	client *telegram.Client
 	waiter *floodwait.Waiter
@@ -292,7 +292,7 @@ type userClient struct {
 	fetched map[string]bool
 }
 
-func newUserClient(scrub *scrubber, claimed func(string) bool) (*userClient, error) {
+func newUserClient(scrub *scrubber, proxied func(string) bool) (*userClient, error) {
 	app, err := loadApp()
 	if err != nil {
 		return nil, err
@@ -307,7 +307,7 @@ func newUserClient(scrub *scrubber, claimed func(string) bool) (*userClient, err
 	if _, err := os.Stat(sessionPath()); err != nil {
 		return nil, errors.New("no Telegram login yet: run bottrace user login first")
 	}
-	c := &userClient{scrub: scrub, allow: allow, claimed: claimed, ready: make(chan struct{}),
+	c := &userClient{scrub: scrub, allow: allow, proxied: proxied, ready: make(chan struct{}),
 		peers: loadPeers(), names: map[int64]string{}, seen: map[int]string{}, last: map[string][]json.RawMessage{}, fetched: map[string]bool{}}
 	for name, p := range c.peers {
 		c.names[p.ID] = name
@@ -485,9 +485,6 @@ func rawID(r json.RawMessage) int {
 }
 
 func (c *userClient) claim(key string) bool {
-	if c.claimed != nil && c.claimed(key) {
-		return false
-	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.fetched[key] {
@@ -497,7 +494,8 @@ func (c *userClient) claim(key string) bool {
 	return true
 }
 
-// fetchMedia saves the picture of the message and its custom emoji for the pages, unless the bot side has them.
+// fetchMedia saves the picture of the message and its custom emoji for the pages. Custom emoji of a bot behind the
+// proxy come from the bot side, under the same key.
 func (c *userClient) fetchMedia(ctx context.Context, bot string, m *tg.Message) {
 	switch t := m.Media.(type) {
 	case *tg.MessageMediaPhoto:
@@ -514,6 +512,9 @@ func (c *userClient) fetchMedia(ctx context.Context, bot string, m *tg.Message) 
 				c.save(ctx, bot, key, "file", &tg.InputDocumentFileLocation{ID: d.ID, AccessHash: d.AccessHash, FileReference: d.FileReference})
 			}
 		}
+	}
+	if c.proxied != nil && c.proxied(bot) {
+		return
 	}
 	var ids []int64
 	for _, e := range m.Entities {

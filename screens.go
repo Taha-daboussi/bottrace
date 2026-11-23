@@ -56,6 +56,10 @@ func num(v any) float64 {
 	switch t := v.(type) {
 	case float64:
 		return t
+	case int:
+		return float64(t)
+	case int64:
+		return float64(t)
 	case string:
 		f, _ := strconv.ParseFloat(t, 64)
 		return f

@@ -107,7 +107,7 @@ Safety:
 - The session file is the full key to the account. It lives in `~/.local/state/bottrace/user/` (folder 700, files 600; bottrace narrows a wider mode at start), never in a session folder, a page or a log. The gotd logger stays off.
 - About 4 Telegram calls a second at most; a FLOOD_WAIT of up to 2 minutes is waited out and noted in the timeline, a longer one fails the call. The client never marks messages read and never sets the online status. Bot ids and access hashes are cached in `peers.json`, so `contacts.resolveUsername` runs once per bot.
 - Real taps change the bot's state like a person would. Keep to the money rules of the test env.
-- Messages that the account types in an allowlisted chat from another app (Telegram Web) are recorded too, marked "typed by the account in another app".
+- The account's own messages in an allowlisted chat (from bottrace or from another app such as Telegram Web) are recorded too, marked "sent by the account".
 
 ## Not seen
 

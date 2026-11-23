@@ -250,7 +250,7 @@ func accountHTML(e event, bySeq map[int]screen, media map[string]string) templat
 		meta, _ := m["user_meta"].(map[string]any)
 		head := fmt.Sprintf(`<div class="line"><span class="m">%s</span> as the account got it · @%s · msg %d`, html.EscapeString(e.Method), html.EscapeString(e.Bot), st.ID)
 		if meta["out"] == true {
-			head = fmt.Sprintf(`<div class="line"><span class="m">%s</span> typed by the account in another app · @%s · msg %d`, html.EscapeString(e.Method), html.EscapeString(e.Bot), st.ID)
+			head = fmt.Sprintf(`<div class="line"><span class="m">%s</span> sent by the account · @%s · msg %d`, html.EscapeString(e.Method), html.EscapeString(e.Bot), st.ID)
 		}
 		b.WriteString(head)
 		if sc, ok := bySeq[e.Seq]; ok {

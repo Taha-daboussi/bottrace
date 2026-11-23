@@ -67,19 +67,9 @@ func (bs *bots) pick(chat int64) (*bot, error) {
 	return nil, errors.New("more than one bot: pass -chat")
 }
 
-// claimed says whether a bot behind the proxy already fetches this media key.
-func (bs *bots) claimed(key string) bool {
-	bs.mu.Lock()
-	defer bs.mu.Unlock()
-	for _, b := range bs.all {
-		b.mu.Lock()
-		ok := b.fetched[key]
-		b.mu.Unlock()
-		if ok {
-			return true
-		}
-	}
-	return false
+// proxied says whether a bot with this username runs behind the proxy.
+func (bs *bots) proxied(name string) bool {
+	return slices.ContainsFunc(bs.usernames(), func(u string) bool { return strings.EqualFold(u, name) })
 }
 
 func (bs *bots) usernames() []string {

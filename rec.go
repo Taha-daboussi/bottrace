@@ -56,7 +56,7 @@ func cmdRec(args []string) error {
 	}
 	p := &proxy{ca: ca, scrub: newScrubber(), bots: newBots(), upstream: newUpstream()}
 	if *withUser {
-		if p.user, err = newUserClient(p.scrub, p.bots.claimed); err != nil {
+		if p.user, err = newUserClient(p.scrub, p.bots.proxied); err != nil {
 			return err
 		}
 	}
@@ -314,6 +314,9 @@ func (p *proxy) controlUser(w http.ResponseWriter, r *http.Request, tap bool) {
 			continue
 		}
 		m, _ := x.Result.(map[string]any)
+		if meta, _ := m["user_meta"].(map[string]any); meta["out"] == true {
+			continue
+		}
 		st := fromMessage(m)
 		fmt.Fprintf(&b, "\n── msg %d as the account got it (%s)\n%s", st.ID, x.Method, textGrid(st, false))
 	}
