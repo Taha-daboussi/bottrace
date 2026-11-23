@@ -59,6 +59,7 @@ pre.plain{background:var(--panel);padding:10px;border-radius:8px;overflow:auto;f
 .tl .line{font:12.5px ui-monospace,Menlo,Consolas,monospace;color:var(--muted);word-break:break-all}
 .tl .out .line{padding-left:14px;border-left:2px solid var(--line)}
 .tl .line .m{color:var(--text)}
+.tl .line a{color:var(--link)}
 .tl .line.err,.tl .err .line{color:var(--err)}
 .tl .toast{display:inline-block;background:rgba(0,0,0,.55);color:#fff;border-radius:14px;padding:4px 12px;font-size:13px}
 .tl .lat{color:var(--ok);font-size:12px}

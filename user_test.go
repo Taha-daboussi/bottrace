@@ -212,7 +212,13 @@ func TestAccountSideInScreensAndTimeline(t *testing.T) {
 		Params: map[string]any{"chat_id": "5"}, Result: map[string]any{"message_id": float64(10), "chat": map[string]any{"id": float64(5)}, "text": "hi"}}
 	tap := event{Seq: 4, T: now.Add(4 * time.Second), Kind: "tg_user", Bot: "proxied_bot", Method: "tap", OK: true, Ms: 412,
 		Params: map[string]any{"label": "Deposit check", "data": "dep:check"}, Result: map[string]any{"text": "Nothing new yet."}}
-	events := []event{call, recv(2, "proxied_bot"), recv(3, "staging_bot"), tap}
+	out := func(seq int, text string) event {
+		e := recv(seq, "staging_bot")
+		e.Result = roundTrip(t, map[string]any{"message_id": seq, "chat": map[string]any{"id": 1}, "text": text, "user_meta": map[string]any{"out": true}})
+		return e
+	}
+	send := event{Seq: 5, T: now.Add(5 * time.Second), Kind: "tg_user", Bot: "staging_bot", Method: "send", OK: true, Params: map[string]any{"text": "/start"}}
+	events := []event{call, recv(2, "proxied_bot"), recv(3, "staging_bot"), tap, send, out(6, "/start"), out(7, "typed in web")}
 
 	screens, _ := buildScreens(events)
 	if len(screens) != 2 || screens[0].Method != "sendMessage" || screens[1].Method != "message (as received)" || screens[1].Bot != "staging_bot" {
@@ -224,10 +230,13 @@ func TestAccountSideInScreensAndTimeline(t *testing.T) {
 		t.Fatal(err)
 	}
 	page := readFile(t, dir+"/t.html")
-	for _, want := range []string{"account side", "as the account got it", "real tap through Telegram", "toast: Nothing new yet.", "412 ms", `href="screens/002.html"`} {
+	for _, want := range []string{"account side", "as the account got it", "real tap through Telegram", "toast: Nothing new yet.", "412 ms", `href="screens/002.html"`, "2 account actions", "typed in web", "sent from another app"} {
 		if !strings.Contains(page, want) {
 			t.Fatalf("timeline misses %q", want)
 		}
+	}
+	if n := strings.Count(page, "/start"); n != 1 {
+		t.Fatalf("the account's own /start shows %d times, want once (the send)", n)
 	}
 	if strings.Index(page, "hi proxied_bot") > strings.Index(page, "Deposit check") {
 		t.Fatal("timeline is not in time order")

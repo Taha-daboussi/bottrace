@@ -194,7 +194,7 @@ func buildScreens(events []event) ([]screen, map[string]string) {
 	}
 	var out []screen
 	for _, e := range events {
-		if e.Kind == "tg_user" && (e.Method == "message" || e.Method == "edit") && !botSide[strings.ToLower(e.Bot)] {
+		if e.Kind == "tg_user" && (e.Method == "message" || e.Method == "edit") && !accountOut(e) && !botSide[strings.ToLower(e.Bot)] {
 			out = append(out, receivedScreen(e, len(out)+1, media))
 			continue
 		}
@@ -229,6 +229,13 @@ func buildScreens(events []event) ([]screen, map[string]string) {
 		out = append(out, sc)
 	}
 	return out, media
+}
+
+// accountOut says whether a user-side message was sent by the account itself.
+func accountOut(e event) bool {
+	m, _ := e.Result.(map[string]any)
+	meta, _ := m["user_meta"].(map[string]any)
+	return meta["out"] == true
 }
 
 // receivedScreen is a message as the account got it, for a bot that does not run behind the proxy.
