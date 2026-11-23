@@ -350,6 +350,7 @@ func newUserClient(scrub *scrubber, proxied func(string) bool, only []string, wh
 	if err := secureUserDir(); err != nil {
 		return nil, err
 	}
+	full := allow
 	if len(only) > 0 {
 		var scoped allowlist
 		for _, n := range only {
@@ -372,6 +373,10 @@ func newUserClient(scrub *scrubber, proxied func(string) bool, only []string, wh
 	c := &userClient{scrub: scrub, allow: allow, proxied: proxied, lock: lock, ready: make(chan struct{}),
 		peers: loadPeers(), names: map[int64]string{}, seen: map[int]string{}, last: map[string][]json.RawMessage{}, fetched: map[string]bool{}}
 	for name, p := range c.peers {
+		if _, ok := full.match(p.ID, name, true); !ok {
+			delete(c.peers, name)
+			continue
+		}
 		c.names[p.ID] = name
 	}
 	d := tg.NewUpdateDispatcher()
@@ -387,7 +392,7 @@ func newUserClient(scrub *scrubber, proxied func(string) bool, only []string, wh
 		c.onDelete(u.Messages)
 		return nil
 	})
-	gaps := updates.New(updates.Config{Handler: d})
+	gaps := updates.New(updates.Config{Handler: d, BeforeRun: updates.BeforeRunBuffer})
 	c.client, c.waiter = newTelegram(app, &memoryCopy{data: data}, gaps, func(w floodwait.FloodWait) {
 		c.sess.add(event{Kind: "note", Note: fmt.Sprintf("Telegram asked the account to wait %s (%s)", w.Duration.Round(time.Second), w.Name)})
 	})
@@ -453,8 +458,11 @@ func (c *userClient) resolve(ctx context.Context, e allowEntry) (peer, error) {
 func (c *userClient) remember(name string, p peer) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if old, ok := c.peers[name]; ok && old == p {
-		return
+	if old, ok := c.peers[name]; ok {
+		if old == p {
+			return
+		}
+		delete(c.names, old.ID)
 	}
 	c.peers[name] = p
 	c.names[p.ID] = name
@@ -710,7 +718,7 @@ func (c *userClient) inputPeer(ctx context.Context, e allowEntry) (*tg.InputPeer
 	c.mu.Lock()
 	p, ok := c.peers[e.Username]
 	c.mu.Unlock()
-	if !ok {
+	if !ok || (e.ID != 0 && p.ID != e.ID) {
 		var err error
 		if p, err = c.resolve(ctx, e); err != nil {
 			return nil, err

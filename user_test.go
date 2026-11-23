@@ -242,3 +242,37 @@ func readFile(t *testing.T, p string) string {
 	}
 	return string(b)
 }
+
+func TestStalePeerCacheDoesNotBeatThePin(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	if err := os.MkdirAll(userDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(configDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write := func(p, s string, mode os.FileMode) {
+		if err := os.WriteFile(p, []byte(s), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(appPath(), "api_id=1\napi_hash=abc\n", 0o600)
+	write(allowlistPath(), "@foo_bot rw 200\n@bar_bot rw\n", 0o600)
+	write(sessionPath(), "{}", 0o600)
+	write(peersPath(), `{"foo_bot":{"id":100,"access_hash":1},"bar_bot":{"id":300,"access_hash":3}}`, 0o600)
+	c, err := newUserClient(newScrubber(), nil, []string{"@bar_bot"}, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.lock.Close()
+	if _, ok := c.peers["foo_bot"]; ok {
+		t.Fatal("a cached id that the pin does not allow stayed in the cache")
+	}
+	if _, ok := c.names[100]; ok {
+		t.Fatal("the old id still maps to the pinned name")
+	}
+	if p := c.peers["bar_bot"]; p.ID != 300 {
+		t.Fatal("a valid cache entry outside the -bot scope was dropped")
+	}
+}
