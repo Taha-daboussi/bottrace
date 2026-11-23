@@ -74,7 +74,7 @@ var timelineTmpl = template.Must(template.New("tl").Funcs(funcs).Parse(`<!doctyp
 <title>Bot timeline</title><style>{{.CSS}}</style></head><body>
 <header class="top"><h1>{{.Name}}</h1><a href="index.html">screens</a>
 <span class="filters"><label><input type="checkbox" checked data-hide="no-tg"> Telegram</label><label><input type="checkbox" checked data-hide="no-usr"> account side</label><label><input type="checkbox" checked data-hide="no-out"> outside calls</label><label><input type="checkbox" data-show="show-bg"> background calls ({{.Background}})</label><label><input type="checkbox" checked data-hide="no-misc"> other</label><label><input type="checkbox" data-show="err-only"> errors only</label></span></header>
-<main><p class="meta">{{.Actions}} user actions · {{.Calls}} bot calls · {{.Outside}} outside calls ({{.Background}} in the background, hidden by default) · started {{clock .Start}}</p>
+<main><p class="meta">{{.Actions}} user actions · {{.Account}} account actions · {{.Calls}} bot calls · {{.Outside}} outside calls ({{.Background}} in the background, hidden by default) · started {{clock .Start}}</p>
 <div class="tl">{{range .Items}}<div class="item {{.Class}}" id="seq{{.Seq}}"><div class="t">{{since $.Start .T}}</div><div class="body">{{.Body}}</div></div>{{end}}</div></main>
 <script>document.querySelectorAll('[data-hide]').forEach(c=>c.onchange=()=>document.body.classList.toggle(c.dataset.hide,!c.checked));document.querySelectorAll('[data-show]').forEach(c=>c.onchange=()=>document.body.classList.toggle(c.dataset.show,c.checked));</script>
 </body></html>`))
@@ -89,7 +89,8 @@ func writeTimeline(dir string, events []event, path string) error {
 	}
 	windows := actionWindows(sorted)
 	var items []tlItem
-	actions, calls, outside, background := 0, 0, 0, 0
+	actions, calls, outside, background, account := 0, 0, 0, 0, 0
+	lastSend := map[string]event{}
 	var lastOut string
 	for i, e := range sorted {
 		it := tlItem{Seq: e.Seq, T: e.T}
@@ -127,9 +128,22 @@ func writeTimeline(dir string, events []event, path string) error {
 			it.Repeat = 1
 			it.Body = outsideHTML(e, 1)
 		case "tg_user":
+			if accountOut(e) {
+				m, _ := e.Result.(map[string]any)
+				if s, ok := lastSend[e.Bot]; ok && e.T.Sub(s.T) < 10*time.Second && sendText(s) == str(m["text"]) {
+					continue
+				}
+				it.Class = "usr action"
+				it.Body = accountOutHTML(e, m)
+				break
+			}
 			it.Class = "usr"
 			if e.Method == "tap" || e.Method == "send" {
 				it.Class += " action"
+				account++
+			}
+			if e.Method == "send" {
+				lastSend[e.Bot] = e
 			}
 			if e.Error != "" {
 				it.Class += " err"
@@ -155,7 +169,7 @@ func writeTimeline(dir string, events []event, path string) error {
 		return err
 	}
 	defer f.Close()
-	return timelineTmpl.Execute(f, map[string]any{"Name": filepath.Base(dir), "Items": items, "Start": start, "Actions": actions, "Calls": calls, "Outside": outside, "Background": background, "CSS": template.CSS(pageCSS)})
+	return timelineTmpl.Execute(f, map[string]any{"Name": filepath.Base(dir), "Items": items, "Start": start, "Actions": actions, "Account": account, "Calls": calls, "Outside": outside, "Background": background, "CSS": template.CSS(pageCSS)})
 }
 
 // latency is the time from a user action to the bot's first call after it.
@@ -247,12 +261,7 @@ func accountHTML(e event, bySeq map[int]screen, media map[string]string) templat
 			st.Media.Path = media[st.Media.UniqueID]
 		}
 		st.Emoji = media
-		meta, _ := m["user_meta"].(map[string]any)
-		head := fmt.Sprintf(`<div class="line"><span class="m">%s</span> as the account got it · @%s · msg %d`, html.EscapeString(e.Method), html.EscapeString(e.Bot), st.ID)
-		if meta["out"] == true {
-			head = fmt.Sprintf(`<div class="line"><span class="m">%s</span> sent by the account · @%s · msg %d`, html.EscapeString(e.Method), html.EscapeString(e.Bot), st.ID)
-		}
-		b.WriteString(head)
+		fmt.Fprintf(&b, `<div class="line"><span class="m">%s</span> as the account got it · @%s · msg %d`, html.EscapeString(e.Method), html.EscapeString(e.Bot), st.ID)
 		if sc, ok := bySeq[e.Seq]; ok {
 			fmt.Fprintf(&b, ` · <a href="screens/%03d.html">screen %d</a>`, sc.N, sc.N)
 			st = sc.State
@@ -261,6 +270,21 @@ func accountHTML(e event, bySeq map[int]screen, media map[string]string) templat
 		b.WriteString(string(msgHTML(st, "")))
 	}
 	return template.HTML(b.String())
+}
+
+func sendText(e event) string {
+	params, _ := e.Params.(map[string]any)
+	return str(params["text"])
+}
+
+// accountOutHTML draws a message that the account sent from another app (Telegram Web), as a user bubble.
+func accountOutHTML(e event, m map[string]any) template.HTML {
+	text := str(m["text"])
+	if text == "" {
+		text = str(m["caption"])
+	}
+	return template.HTML(fmt.Sprintf(`<div class="user">💬 %s</div><div class="line" style="text-align:right">account → @%s · sent from another app · msg %v</div>`,
+		html.EscapeString(text), html.EscapeString(e.Bot), m["message_id"]))
 }
 
 func userName(v any) string {
