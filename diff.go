@@ -35,6 +35,22 @@ var diffTmpl = template.Must(template.New("diff").Funcs(funcs).Funcs(template.Fu
 {{if or .Changed .Live}}<div class="diffline">{{.Lines}}</div>{{end}}</div>{{end}}
 </main><script>document.getElementById('only').onchange=e=>document.querySelectorAll('.pair:not(.changed):not(.only)').forEach(p=>p.style.display=e.target.checked?'none':'')</script></body></html>`))
 
+// parseArgs parses flags before, between and after the positional arguments.
+func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
+	var pos []string
+	for len(args) > 0 {
+		if err := fs.Parse(args); err != nil {
+			return nil, err
+		}
+		if fs.NArg() == 0 {
+			break
+		}
+		pos = append(pos, fs.Arg(0))
+		args = fs.Args()[1:]
+	}
+	return pos, nil
+}
+
 type stringList []string
 
 func (s *stringList) String() string     { return strings.Join(*s, ",") }
@@ -78,16 +94,9 @@ func cmdDiff(args []string) error {
 	fail := fs.Bool("fail", false, "exit with 1 when a screen changed or is only on one side")
 	var liveRe stringList
 	fs.Var(&liveRe, "live-re", "a regexp of more live values (repeat the flag for more)")
-	var pos []string
-	for len(args) > 0 {
-		if err := fs.Parse(args); err != nil {
-			return err
-		}
-		if fs.NArg() == 0 {
-			break
-		}
-		pos = append(pos, fs.Arg(0))
-		args = fs.Args()[1:]
+	pos, err := parseArgs(fs, args)
+	if err != nil {
+		return err
 	}
 	if len(pos) != 2 {
 		return fmt.Errorf("diff takes two sessions")

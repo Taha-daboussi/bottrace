@@ -145,6 +145,12 @@ var screenTmpl = template.Must(template.New("screen").Funcs(funcs).Parse(`<!doct
 {{if .S.Flags}}<ul class="flags">{{range .S.Flags}}<li class="{{.Level}}">{{if eq .Level "error"}}✖{{else}}⚠{{end}} {{.Text}}</li>{{end}}</ul>{{end}}
 <h3>Text</h3><pre class="plain">{{.Text}}</pre></main></body></html>`))
 
+// bareTmpl is one message with nothing around it: no clock, ids or links, so two runs of the same screen give
+// the same pixels and a screenshot compare sees only real changes.
+var bareTmpl = template.Must(template.New("bare").Funcs(funcs).Parse(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Screen {{pad .S.N}}</title><style>{{.CSS}}
+body{padding:8px}.msg{width:440px}</style></head><body>{{msg .S.State "../"}}</body></html>`))
+
 var indexTmpl = template.Must(template.New("index").Funcs(funcs).Parse(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Bot screens</title><style>{{.CSS}}</style></head><body>
 <header class="top"><h1>{{.Name}}</h1><a href="timeline.html">timeline</a><a href="screens.txt">all screens as text</a></header>
@@ -190,6 +196,15 @@ func renderSession(dir string) (renderOut, error) {
 			return out, err
 		}
 		err = screenTmpl.Execute(f, map[string]any{"S": sc, "Total": len(screens), "Prev": i, "Next": i + 2, "Text": txt, "CSS": template.CSS(pageCSS)})
+		f.Close()
+		if err != nil {
+			return out, err
+		}
+		f, err = os.Create(filepath.Join(sdir, fmt.Sprintf("%03d.bare.html", sc.N)))
+		if err != nil {
+			return out, err
+		}
+		err = bareTmpl.Execute(f, map[string]any{"S": sc, "CSS": template.CSS(pageCSS)})
 		f.Close()
 		if err != nil {
 			return out, err
