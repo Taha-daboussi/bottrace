@@ -34,7 +34,7 @@ Ctrl-C in terminal 1 stops the recorder and renders the session. Restart the bot
 
 ```sh
 bottrace render [session]      # default: the latest; works while rec runs too
-bottrace diff <A> <B>          # screens of two sessions side by side, e.g. main and a branch
+bottrace diff <A> <B>          # the screens of two sessions step by step, e.g. main and a branch (see Diff)
 bottrace ls
 ```
 
@@ -47,6 +47,19 @@ A session lives in `~/.local/share/bottrace/sessions/<date>-<name>/`:
 - `events.jsonl`: the raw record.
 
 For a before/after check, record the same steps on `main` and on the branch and run `bottrace diff`.
+
+## Diff
+
+```sh
+bottrace diff <A> <B> [-live money,percent,time,number] [-live-re <regexp>] [-fail] [-by steps|screens|auto] [-out dir]
+```
+
+- Pairs by step: each user action (a message or a tap, from the bot side, so also a tap in Telegram Web) and the final state of each message it changed. A screen that draws first and fills in later, or a step that only one side has, does not shift the rest. The steps of the two sessions line up by their input (`send /start`, `tap goto:settings`). A session with no actions falls back to pairing by screen number (`-by screens`).
+- Compares everything a test needs: the text, the formatting (bold, underline, links), the custom emoji ids, and for each button its label, target (callback data or URL), icon and style.
+- Change kinds per screen: `text`, `format`, `emoji`, `media`, `buttons` (added, removed or renamed), `order`, `layout`, `callback`, `style`, `icon`, `live`.
+- `-live`: values that change on their own between two runs (prices, clocks) count as `live`, not as a change. Off by default, because a real change of such a value (a fee, a limit) then hides there too. `diff.txt` still shows each live value as `~ old → new`.
+- `-fail`: exit with 1 when a screen changed or a step is only on one side, for a script or an e2e gate.
+- Writes `index.html` (side by side), `diff.txt` (line diff of the full screens) and `diff.json` (each step with its status and change kinds).
 
 ## Limit flags
 

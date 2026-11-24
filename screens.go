@@ -321,6 +321,12 @@ func textHTML(st msgState, prefix string) string {
 		return `<span class="raw">` + html.EscapeString(st.Text) + `</span>`
 	}
 	units := utf16.Encode([]rune(st.Text))
+	return walkEntities(st, func(e entity) string { return openTag(e, st, prefix, units) }, closeTag, html.EscapeString)
+}
+
+// walkEntities writes the text of st with open and close around each entity, nested as Telegram nests them.
+func walkEntities(st msgState, open, close func(entity) string, esc func(string) string) string {
+	units := utf16.Encode([]rune(st.Text))
 	ents := append([]entity(nil), st.Entities...)
 	sort.SliceStable(ents, func(i, j int) bool {
 		if ents[i].Offset != ents[j].Offset {
@@ -341,14 +347,14 @@ func textHTML(st msgState, prefix string) string {
 			if top.Offset+top.Length > p {
 				break
 			}
-			b.WriteString(closeTag(top))
+			b.WriteString(close(top))
 			stack = stack[:len(stack)-1]
 		}
 	}
 	for i := 0; i <= len(units); {
 		closeAt(pos)
 		for _, idx := range opens[pos] {
-			b.WriteString(openTag(ents[idx], st, prefix, units))
+			b.WriteString(open(ents[idx]))
 			stack = append(stack, idx)
 		}
 		if i == len(units) {
@@ -360,12 +366,12 @@ func textHTML(st msgState, prefix string) string {
 			r = utf16.DecodeRune(r, rune(units[i+1]))
 			size = 2
 		}
-		b.WriteString(html.EscapeString(string(r)))
+		b.WriteString(esc(string(r)))
 		i += size
 		pos += size
 	}
 	for len(stack) > 0 {
-		b.WriteString(closeTag(ents[stack[len(stack)-1]]))
+		b.WriteString(close(ents[stack[len(stack)-1]]))
 		stack = stack[:len(stack)-1]
 	}
 	return b.String()
