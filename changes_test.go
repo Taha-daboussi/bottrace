@@ -32,6 +32,10 @@ func TestScreenChanges(t *testing.T) {
 			s.Rows = append([][]button{{{Text: "New", Data: "n", Kind: "callback"}}}, s.Rows...)
 		}, "", []string{"button-added"}},
 		{"removed button", func(s *msgState) { s.Rows = s.Rows[:1] }, "", []string{"button-removed"}},
+		{"rename and swap on one screen", func(s *msgState) {
+			s.Rows[1][0].Text = "D"
+			s.Rows[0][0], s.Rows[0][1] = s.Rows[0][1], s.Rows[0][0]
+		}, "", []string{"order", "label"}},
 		{"rename and add on one screen", func(s *msgState) {
 			s.Rows[1][0].Text = "D"
 			s.Rows = append(s.Rows, []button{{Text: "New", Data: "n", Kind: "callback"}})
