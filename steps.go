@@ -112,7 +112,12 @@ func buildSteps(events []event) []step {
 }
 
 // liveMask hides values that change between two runs on their own (prices, clocks), when the user asks for it.
-type liveMask []*regexp.Regexp
+type liveMask []liveRule
+
+type liveRule struct {
+	re   *regexp.Regexp
+	with string
+}
 
 var livePatterns = map[string]string{
 	"money":   `[$€£]\s?[\d,]+(\.\d+)?[KMBT]?|[\d,]+(\.\d+)?[KMBT]?\s?(USD|USDC|SOL|ETH|BNB)\b`,
@@ -132,21 +137,21 @@ func parseLive(names string, extra []string) (liveMask, error) {
 		if !ok {
 			return nil, fmt.Errorf("-live: unknown kind %q (money, percent, time, number)", n)
 		}
-		m = append(m, regexp.MustCompile(p))
+		m = append(m, liveRule{regexp.MustCompile(p), "#"})
 	}
 	for _, p := range extra {
 		re, err := regexp.Compile(p)
 		if err != nil {
 			return nil, fmt.Errorf("-live-re %q: %w", p, err)
 		}
-		m = append(m, re)
+		m = append(m, liveRule{re, "#"})
 	}
 	return m, nil
 }
 
 func (m liveMask) apply(s string) string {
-	for _, re := range m {
-		s = re.ReplaceAllString(s, "#")
+	for _, r := range m {
+		s = r.re.ReplaceAllString(s, r.with)
 	}
 	return s
 }

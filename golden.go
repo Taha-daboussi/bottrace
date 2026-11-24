@@ -17,6 +17,7 @@ import (
 // image. A field that is left out is not checked: a design image shows labels and colors, not callback data.
 type golden struct {
 	From  string       `json:"from,omitempty"`
+	Emoji string       `json:"emoji,omitempty"` // "loose": emoji in text and labels are not checked (for a file from an image)
 	Steps []goldenStep `json:"steps"`
 }
 
@@ -27,6 +28,7 @@ type goldenStep struct {
 }
 
 type goldenScreen struct {
+	Emoji  string            `json:"emoji,omitempty"` // "loose" or "exact"; empty: the file's setting
 	Text   string            `json:"text"`
 	Markup *string           `json:"markup,omitempty"`
 	Media  *string           `json:"media,omitempty"`
@@ -131,6 +133,14 @@ func cmdSnapshot(args []string) error {
 
 var emojiTag = regexp.MustCompile(`<emoji [^>]*>|</emoji>`)
 
+const emojiChar = `[\x{1F000}-\x{1FAFF}\x{2300}-\x{23FF}\x{2600}-\x{27BF}\x{2B00}-\x{2BFF}\x{3030}\x{303D}\x{3297}\x{3299}]`
+
+// looseEmoji drops emoji (with their variation selector, skin tone and joiner parts) and the space after each:
+// an image shows a picture, not which code point, and not whether it is in the label or a custom icon.
+var looseEmoji = liveMask{
+	{regexp.MustCompile(`(` + emojiChar + `[\x{FE0F}\x{20E3}]*(\x{200D}` + emojiChar + `[\x{FE0F}]*)*|\x{FE0F}) ?`), ""},
+}
+
 // expectedRows is the golden keyboard with each field it leaves out taken from the button of the same label.
 func expectedRows(g [][]goldenButton, actual [][]button, live liveMask) [][]button {
 	byLabel := map[string][]button{}
@@ -183,10 +193,10 @@ func checkKinds(g goldenScreen, st msgState, live liveMask) []string {
 		set["live"] = true
 	}
 	if g.Markup != nil && textOK {
-		want := live.apply(*g.Markup)
+		want := live.applyMarkup(*g.Markup)
 		withEmoji := emojiTag.MatchString(want)
-		if live.apply(markup(st, withEmoji)) != want {
-			if live.apply(markup(st, false)) != emojiTag.ReplaceAllString(want, "") {
+		if live.applyMarkup(markup(st, withEmoji)) != want {
+			if live.applyMarkup(markup(st, false)) != emojiTag.ReplaceAllString(want, "") {
 				set["format"] = true
 			} else {
 				set["emoji"] = true
@@ -313,11 +323,15 @@ func runCheck(g golden, steps []step, live liveMask) checkResult {
 		}
 		for i, gsc := range gs.Screens {
 			so := checkScreenOut{Status: "pass"}
+			sl := live
+			if gsc.Emoji == "loose" || (gsc.Emoji == "" && g.Emoji == "loose") {
+				sl = append(append(liveMask{}, looseEmoji...), live...)
+			}
 			if i >= len(ab[1].Screens) {
 				so.Status = "missing"
 			} else {
 				st := ab[1].Screens[i].State
-				so.Kinds = checkKinds(gsc, st, live)
+				so.Kinds = checkKinds(gsc, st, sl)
 				switch {
 				case len(so.Kinds) == 1 && so.Kinds[0] == "live":
 					so.Status = "live"
@@ -326,7 +340,7 @@ func runCheck(g golden, steps []step, live liveMask) checkResult {
 					want := goldenText(gsc)
 					got := goldenText(likeGolden(goldenFromState(st), gsc))
 					wl, gl := strings.Split(want, "\n"), strings.Split(got, "\n")
-					for _, l := range lineDiffBy(wl, gl, maskAll(wl, live), maskAll(gl, live)) {
+					for _, l := range lineDiffBy(wl, gl, maskAll(wl, sl), maskAll(gl, sl)) {
 						if !strings.HasPrefix(l, "  ") {
 							so.Diff = append(so.Diff, l)
 						}
@@ -401,12 +415,14 @@ func goldenText(g goldenScreen) string {
 	}
 	for r, row := range *g.Rows {
 		for c, gb := range row {
-			fmt.Fprintf(&b, "%d.%d %s", r+1, c+1, gb.Text)
-			if gb.Data != nil {
+			fmt.Fprintf(&b, "  %d.%d %s", r+1, c+1, gb.Text)
+			switch {
+			case gb.Data != nil:
 				b.WriteString(" → " + *gb.Data)
-			}
-			if gb.URL != nil {
+			case gb.URL != nil:
 				b.WriteString(" → " + *gb.URL)
+			default:
+				b.WriteString(" →")
 			}
 			if gb.Icon != nil && *gb.Icon != "" {
 				b.WriteString(" · icon " + *gb.Icon)
@@ -424,7 +440,11 @@ func printCheck(r checkResult) {
 	for _, s := range r.Steps {
 		fmt.Printf("%-7s %s\n", s.Status, s.Input)
 		for i, sc := range s.Screens {
-			if sc.Status == "pass" {
+			switch sc.Status {
+			case "pass":
+				continue
+			case "live":
+				fmt.Printf("  screen %d: live (only values that -live or loose emoji leave out differ)\n", i+1)
 				continue
 			}
 			fmt.Printf("  screen %d: %s %s\n", i+1, sc.Status, strings.Join(sc.Kinds, ", "))
