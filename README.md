@@ -41,7 +41,7 @@ bottrace ls
 A session lives in `~/.local/share/bottrace/sessions/<date>-<name>/`:
 
 - `index.html`: every screen drawn like Telegram (picture, formatted text, custom emoji, buttons with their style), plus the limit flags.
-- `screens/NNN.html` and `screens/NNN.txt`: one screen, and the same screen as plain text (`[ ✦ Positions ]`, `✦` = a custom emoji icon, `| primary` = the button style).
+- `screens/NNN.html`, `screens/NNN.bare.html` and `screens/NNN.txt`: one screen, the message alone (for a screenshot compare), and the same screen as plain text (`[ ✦ Positions ]`, `✦` = a custom emoji icon, `| primary` = the button style).
 - `screens.txt`: all screens as text, for grep and diffs.
 - `timeline.html`: user actions, bot calls and their answers, toasts, deletes and outside calls in time order, with the bot's answer time per action and tx links. Outside calls that happen outside any user action (feeds, pollers) are hidden by default; a checkbox shows them.
 - `events.jsonl`: the raw record.
@@ -60,6 +60,18 @@ bottrace diff <A> <B> [-live money,percent,time,number] [-live-re <regexp>] [-fa
 - `-live`: values that change on their own between two runs (prices, clocks) count as `live`, not as a change. Off by default, because a real change of such a value (a fee, a limit) then hides there too. `diff.txt` still shows each live value as `~ old → new`.
 - `-fail`: exit with 1 when a screen changed or a step is only on one side, for a script or an e2e gate.
 - Writes `index.html` (side by side), `diff.txt` (line diff of the full screens) and `diff.json` (each step with its status and change kinds).
+
+## Golden files
+
+```sh
+bottrace snapshot [session] [-step 2,5] [-o golden.json]   # the screens of each step, every field set
+bottrace check golden.json [session] [-live money] [-json out.json]
+```
+
+- `snapshot` writes the expected screens of an approved session, step by step: the text, the markup (formatting tags and custom emoji ids), the media kind, and each button with its target, style and icon.
+- `check` lines up the golden steps with the session steps by input and compares only the fields the file sets. `snapshot` writes `nth` for each step (the nth time its input comes, so `-step 9` of the 4th `/start` checks the 4th `/start`); a step with no `nth` matches the next step in order with its input. A session step that the file does not list is not checked; a listed step that the session does not have fails. In a step, the golden screens pair with the session's screens in order, and a screen that the step does not list fails as `extra`: list every screen of a step. Exit 1 on a difference, with a line diff of each failed screen.
+- A golden file can be written by hand, for example from a design image. Leave out what the image cannot show (`data`, `url`, `icon`). Set `"style": ""` for a button with no color. Set `"emoji": "loose"` (for the file or one screen) when the emoji come from a picture: the check then leaves out emoji in the text and the labels (which code point, the variation selector, and whether it is in the label or a custom icon), and checks the rest exactly. Emoji then need a visual check (see bare pages).
+- Bare pages: `render` also writes `screens/NNN.bare.html`, one message with no clock, ids or links. Two runs of the same screen give the same pixels, so a screenshot compare of two bare pages shows only real changes.
 
 ## Limit flags
 

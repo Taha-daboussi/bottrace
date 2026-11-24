@@ -18,6 +18,10 @@ const usage = `bottrace: record, drive and render a Telegram bot session
   bottrace render [session]        write screens/, index.html, timeline.html (default: latest)
   bottrace diff <session A> <session B> [-live money,percent,time,number] [-live-re re] [-fail] [-by steps|screens|auto] [-out dir]
       compare two sessions step by step: text, format, emoji ids, buttons, targets, icons, styles
+  bottrace snapshot [session] [-step 2,5] [-o golden.json]
+      write the expected screens of each step as a golden file (every field set; edit it, or write one by hand)
+  bottrace check <golden.json> [session] [-live money,...] [-json out.json]
+      check a session against a golden file; only the fields the file sets; exit 1 on a difference
   bottrace ls                      list the sessions
 
 User client (the real Telegram account; see README "User client"):
@@ -50,6 +54,10 @@ func main() {
 		err = cmdRender(args)
 	case "diff":
 		err = cmdDiff(args)
+	case "snapshot":
+		err = cmdSnapshot(args)
+	case "check":
+		err = cmdCheck(args)
 	case "ls":
 		err = cmdList()
 	case "user":
