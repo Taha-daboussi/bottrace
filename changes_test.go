@@ -32,6 +32,14 @@ func TestScreenChanges(t *testing.T) {
 			s.Rows = append([][]button{{{Text: "New", Data: "n", Kind: "callback"}}}, s.Rows...)
 		}, "", []string{"button-added"}},
 		{"removed button", func(s *msgState) { s.Rows = s.Rows[:1] }, "", []string{"button-removed"}},
+		{"rename and add on one screen", func(s *msgState) {
+			s.Rows[1][0].Text = "D"
+			s.Rows = append(s.Rows, []button{{Text: "New", Data: "n", Kind: "callback"}})
+		}, "", []string{"label", "button-added"}},
+		{"emoji id on a line with a live price", func(s *msgState) {
+			s.Text = "Title\nHi ⭐ $6\nFooter"
+			s.Entities[1].Emoji = "222"
+		}, "money", []string{"emoji"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -72,6 +80,20 @@ func TestDiffJSONHasChangeIds(t *testing.T) {
 	ch := res.Steps[0].Screens[0].Changes
 	if res.Ids != 1 || len(ch) != 1 || ch[0].ID != "1.1.1" || ch[0].Kind != "callback" {
 		t.Fatalf("got %+v", res)
+	}
+}
+
+func TestOneSideStepGetsAnId(t *testing.T) {
+	a := &sessionBuilder{t: t}
+	a.send("/start")
+	a.draw("sendMessage", home(t, 10, "$5"))
+	b := &sessionBuilder{t: t}
+	b.send("/start")
+	b.draw("sendMessage", home(t, 20, "$5"))
+	b.tap("goto:nothing")
+	res, _ := runDiff(t, a, b)
+	if len(res.Steps) != 2 || len(res.Steps[1].Changes) != 1 || res.Steps[1].Changes[0].ID != "2.0.1" || res.Steps[1].Changes[0].Kind != "step-added" {
+		t.Fatalf("got %+v", res.Steps)
 	}
 }
 

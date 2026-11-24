@@ -73,6 +73,7 @@ type diffJSONStep struct {
 	InputB  string           `json:"input_b,omitempty"`
 	Status  string           `json:"status"`
 	Kinds   []string         `json:"kinds,omitempty"`
+	Changes []diffChange     `json:"changes,omitempty"`
 	Screens []diffJSONScreen `json:"screens"`
 }
 
@@ -153,7 +154,19 @@ func cmdDiff(args []string) error {
 		if sp.oneSide && len(sp.screens) == 0 {
 			stepStatus = "only"
 			res.Only++
-			fmt.Fprintf(&txt, "=== %s (only, no screen)\n", sp.label)
+			kind, in := "step-added", sp.inB
+			if sp.inA != "" {
+				kind, in = "step-removed", sp.inA
+			}
+			c := diffChange{ID: fmt.Sprintf("%d.0.1", si+1), Kind: kind}
+			if kind == "step-added" {
+				c.After = []string{in}
+			} else {
+				c.Before = []string{in}
+			}
+			js.Changes = []diffChange{c}
+			res.Ids++
+			fmt.Fprintf(&txt, "=== %s (only, no screen)\n» %s %s: %s\n", sp.label, c.ID, c.Kind, in)
 		}
 		for sci, sc := range sp.screens {
 			p := diffPair{Step: sp.label, A: sc[0], B: sc[1], PrefixA: relA + "/", PrefixB: relB + "/"}
