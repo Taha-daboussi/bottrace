@@ -16,8 +16,8 @@ const usage = `bottrace: record, drive and render a Telegram bot session
   bottrace send [-chat id] text    send a message to the bot as the user, wait, print the new screens
   bottrace screen [-chat id]       print the newest bot message of the chat
   bottrace render [session]        write screens/, index.html, timeline.html (default: latest)
-  bottrace diff <session A> <session B> [-out dir]
-      put the screens of two sessions side by side
+  bottrace diff <session A> <session B> [-live money,percent,time,number] [-live-re re] [-fail] [-by steps|screens|auto] [-out dir]
+      compare two sessions step by step: text, format, emoji ids, buttons, targets, icons, styles
   bottrace ls                      list the sessions
 
 User client (the real Telegram account; see README "User client"):

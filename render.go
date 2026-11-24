@@ -74,7 +74,7 @@ body:not(.show-bg) .bg{display:none}
 .pair.changed{outline:2px solid var(--warn)}
 .pair.only{outline:2px dashed var(--muted)}
 .diffline{font:12.5px ui-monospace,Menlo,Consolas,monospace;white-space:pre-wrap;margin:8px 0 0}
-.diffline .del{color:var(--err)}.diffline .add{color:var(--ok)}
+.diffline .del{color:var(--err)}.diffline .add{color:var(--ok)}.diffline .live{color:var(--warn)}
 @media (max-width:640px){.cols{grid-template-columns:1fr}.tl .t{flex-basis:56px}}
 `
 
