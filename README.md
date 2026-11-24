@@ -60,6 +60,8 @@ bottrace diff <A> <B> [-live money,percent,time,number] [-live-re <regexp>] [-fa
 - `-live`: values that change on their own between two runs (prices, clocks) count as `live`, not as a change. Off by default, because a real change of such a value (a fee, a limit) then hides there too. `diff.txt` still shows each live value as `~ old → new`.
 - `-fail`: exit with 1 when a screen changed or a step is only on one side, for a script or an e2e gate.
 - Writes `index.html` (side by side), `diff.txt` (line diff of the full screens) and `diff.json` (each step with its status and change kinds).
+- A list of changes: each change has an id (`step.screen.n`), a kind and the exact lines on each side, in `diff.json` (`changes` of each screen) and as `» 3.1.2 callback: <before>  ⇒  <after>` lines in `diff.txt`. Text changes are groups of changed lines (`text`, `line-added`, `line-removed`, `format`, `emoji`, `live`); button changes match the buttons by label, so one added button gives one `button-added` and nothing else (`button-added`, `button-removed`, `label`, `callback`, `style`, `icon`, `order`, `layout`); also `media`, `screen-added`, `screen-removed`. A judge can answer per id and quote these lines instead of typing them again.
+- `bottrace help diff` (also `check`, `snapshot`, `pages`) prints these docs from the README the binary was built with.
 
 ## Golden files
 

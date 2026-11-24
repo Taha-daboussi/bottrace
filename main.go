@@ -8,6 +8,8 @@ import (
 
 const usage = `bottrace: record, drive and render a Telegram bot session
 
+  bottrace help diff|check|snapshot|pages   the docs of a command, from the README this binary was built with
+
   bottrace rec [-name n] [-addr host:port] [-control host:port] [-tunnel hosts]
       start the recording proxy; start the bot with the env line it prints
   bottrace env                     print the env line for the bot
@@ -63,6 +65,10 @@ func main() {
 	case "user":
 		err = cmdUser(args)
 	case "help", "-h", "--help":
+		if len(args) > 0 {
+			err = helpTopic(args[0])
+			break
+		}
 		fmt.Print(usage)
 	default:
 		fmt.Fprint(os.Stderr, usage)

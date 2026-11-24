@@ -60,10 +60,11 @@ func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
 var errChanged = errors.New("the sessions differ")
 
 type diffJSONScreen struct {
-	Status string   `json:"status"`
-	Kinds  []string `json:"kinds,omitempty"`
-	MsgA   int      `json:"msg_a,omitempty"`
-	MsgB   int      `json:"msg_b,omitempty"`
+	Status  string       `json:"status"`
+	Kinds   []string     `json:"kinds,omitempty"`
+	MsgA    int          `json:"msg_a,omitempty"`
+	MsgB    int          `json:"msg_b,omitempty"`
+	Changes []diffChange `json:"changes,omitempty"`
 }
 
 type diffJSONStep struct {
@@ -72,6 +73,7 @@ type diffJSONStep struct {
 	InputB  string           `json:"input_b,omitempty"`
 	Status  string           `json:"status"`
 	Kinds   []string         `json:"kinds,omitempty"`
+	Changes []diffChange     `json:"changes,omitempty"`
 	Screens []diffJSONScreen `json:"screens"`
 }
 
@@ -83,6 +85,7 @@ type diffJSON struct {
 	Changed int            `json:"changed"`
 	Only    int            `json:"only"`
 	Live    int            `json:"live"`
+	Ids     int            `json:"change_count"`
 	Steps   []diffJSONStep `json:"steps"`
 }
 
@@ -144,16 +147,28 @@ func cmdDiff(args []string) error {
 	res := diffJSON{A: filepath.Base(da), B: filepath.Base(db), By: mode}
 	var pairs []diffPair
 	var txt strings.Builder
-	for _, sp := range pairSteps(ea, eb, mode) {
+	for si, sp := range pairSteps(ea, eb, mode) {
 		js := diffJSONStep{Step: sp.label, InputA: sp.inA, InputB: sp.inB, Screens: []diffJSONScreen{}}
 		kinds := map[string]bool{}
 		stepStatus := "same"
 		if sp.oneSide && len(sp.screens) == 0 {
 			stepStatus = "only"
 			res.Only++
-			fmt.Fprintf(&txt, "=== %s (only, no screen)\n", sp.label)
+			kind, in := "step-added", sp.inB
+			if sp.inA != "" {
+				kind, in = "step-removed", sp.inA
+			}
+			c := diffChange{ID: fmt.Sprintf("%d.0.1", si+1), Kind: kind}
+			if kind == "step-added" {
+				c.After = []string{in}
+			} else {
+				c.Before = []string{in}
+			}
+			js.Changes = []diffChange{c}
+			res.Ids++
+			fmt.Fprintf(&txt, "=== %s (only, no screen)\n» %s %s: %s\n", sp.label, c.ID, c.Kind, in)
 		}
-		for _, sc := range sp.screens {
+		for sci, sc := range sp.screens {
 			p := diffPair{Step: sp.label, A: sc[0], B: sc[1], PrefixA: relA + "/", PrefixB: relB + "/"}
 			p.N = len(pairs) + 1
 			jsc := diffJSONScreen{}
@@ -167,11 +182,19 @@ func cmdDiff(args []string) error {
 				jsc.MsgB = p.B.State.ID
 			}
 			switch {
-			case p.A == nil || p.B == nil:
+			case p.A == nil:
 				p.Changed, jsc.Status = true, "only"
 				res.Only++
+				jsc.Changes = []diffChange{{Kind: "screen-added", After: lb}}
+			case p.B == nil:
+				p.Changed, jsc.Status = true, "only"
+				res.Only++
+				jsc.Changes = []diffChange{{Kind: "screen-removed", Before: la}}
 			default:
 				p.Kinds = changeKinds(p.A.State, p.B.State, live)
+				if len(p.Kinds) > 0 {
+					jsc.Changes = screenChanges(p.A.State, p.B.State, live)
+				}
 				switch {
 				case len(p.Kinds) == 0:
 					jsc.Status = "same"
@@ -208,6 +231,12 @@ func cmdDiff(args []string) error {
 				}
 				p.Lines = template.HTML(hb.String())
 			}
+			for k := range jsc.Changes {
+				c := &jsc.Changes[k]
+				c.ID = fmt.Sprintf("%d.%d.%d", si+1, sci+1, k+1)
+				res.Ids++
+				fmt.Fprintf(&txt, "» %s %s: %s  ⇒  %s\n", c.ID, c.Kind, strings.Join(c.Before, " / "), strings.Join(c.After, " / "))
+			}
 			js.Screens = append(js.Screens, jsc)
 			pairs = append(pairs, p)
 		}
@@ -236,8 +265,8 @@ func cmdDiff(args []string) error {
 	if err := os.WriteFile(filepath.Join(dir, "diff.json"), jb, 0o600); err != nil {
 		return err
 	}
-	fmt.Printf("%d same, %d changed, %d only on one side, %d live only (paired by %s)\n  page: %s\n  text: %s\n  json: %s\n",
-		res.Same, res.Changed, res.Only, res.Live, mode, page, filepath.Join(dir, "diff.txt"), filepath.Join(dir, "diff.json"))
+	fmt.Printf("%d same, %d changed, %d only on one side, %d live only, %d changes (paired by %s)\n  page: %s\n  text: %s\n  json: %s\n",
+		res.Same, res.Changed, res.Only, res.Live, res.Ids, mode, page, filepath.Join(dir, "diff.txt"), filepath.Join(dir, "diff.json"))
 	if *fail && (res.Changed > 0 || res.Only > 0) {
 		return errChanged
 	}
