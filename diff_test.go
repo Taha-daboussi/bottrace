@@ -197,6 +197,10 @@ func TestChangeKinds(t *testing.T) {
 		{"icon", func(s *msgState) { s.Rows[0][0].Icon = "8" }, "", []string{"icon"}},
 		{"order", func(s *msgState) { s.Rows[0][0], s.Rows[0][1] = s.Rows[0][1], s.Rows[0][0] }, "", []string{"order"}},
 		{"layout", func(s *msgState) { s.Rows = [][]button{{s.Rows[0][0]}, {s.Rows[0][1], s.Rows[1][0]}} }, "", []string{"layout"}},
+		{"rename hides no swap", func(s *msgState) {
+			s.Rows[1][0].Text = "D"
+			s.Rows[0][0], s.Rows[0][1] = s.Rows[0][1], s.Rows[0][0]
+		}, "", []string{"buttons", "order"}},
 		{"added button keeps the others matched", func(s *msgState) {
 			s.Rows = append([][]button{{{Text: "New", Data: "n", Kind: "callback"}}}, s.Rows...)
 		}, "", []string{"buttons"}},

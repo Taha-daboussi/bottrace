@@ -344,6 +344,9 @@ func buttonKinds(ra, rb [][]button, live liveMask) []string {
 		out = append(out, "order")
 	default:
 		out = append(out, "buttons")
+		if !slices.Equal(common(la, lb), common(lb, la)) {
+			out = append(out, "order")
+		}
 	}
 	byLabel := map[string][]button{}
 	for i, x := range ba {
@@ -373,6 +376,23 @@ func buttonKinds(ra, rb [][]button, live liveMask) []string {
 	for _, k := range []string{"callback", "style", "icon", "live"} {
 		if seen[k] {
 			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// common keeps the labels of a that b also has (as many times as b has them), in the order of a: when a button is
+// added, removed or renamed, the order of the other buttons can still be compared.
+func common(a, b []string) []string {
+	left := map[string]int{}
+	for _, x := range b {
+		left[x]++
+	}
+	var out []string
+	for _, x := range a {
+		if left[x] > 0 {
+			left[x]--
+			out = append(out, x)
 		}
 	}
 	return out
