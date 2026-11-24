@@ -23,6 +23,7 @@ type golden struct {
 
 type goldenStep struct {
 	Input   string         `json:"input"`
+	Nth     int            `json:"nth,omitempty"` // the nth time this input comes in the session (1 = the first); 0: matched in order
 	Note    string         `json:"note,omitempty"`
 	Screens []goldenScreen `json:"screens"`
 }
@@ -69,6 +70,24 @@ func goldenFromState(st msgState) goldenScreen {
 	return g
 }
 
+// snapshotSteps is the golden form of each step of a session (of the steps in want, when it lists any).
+func snapshotSteps(events []event, want map[int]bool) []goldenStep {
+	var out []goldenStep
+	seen := map[string]int{}
+	for _, st := range buildSteps(events) {
+		seen[st.Input]++
+		if len(want) > 0 && !want[st.N] {
+			continue
+		}
+		gs := goldenStep{Input: st.Input, Nth: seen[st.Input], Screens: []goldenScreen{}}
+		for _, sc := range st.Screens {
+			gs.Screens = append(gs.Screens, goldenFromState(sc.State))
+		}
+		out = append(out, gs)
+	}
+	return out
+}
+
 func cmdSnapshot(args []string) error {
 	fs := flag.NewFlagSet("snapshot", flag.ContinueOnError)
 	out := fs.String("o", "", "write the golden file here (default: stdout)")
@@ -99,17 +118,7 @@ func cmdSnapshot(args []string) error {
 			want[n] = true
 		}
 	}
-	g := golden{From: dir}
-	for _, st := range buildSteps(events) {
-		if len(want) > 0 && !want[st.N] {
-			continue
-		}
-		gs := goldenStep{Input: st.Input, Screens: []goldenScreen{}}
-		for _, sc := range st.Screens {
-			gs.Screens = append(gs.Screens, goldenFromState(sc.State))
-		}
-		g.Steps = append(g.Steps, gs)
-	}
+	g := golden{From: dir, Steps: snapshotSteps(events, want)}
 	if len(g.Steps) == 0 {
 		return errors.New("no steps to snapshot (bottrace ls shows the user actions of each session)")
 	}
@@ -245,7 +254,7 @@ type checkStepOut struct {
 }
 
 type checkScreenOut struct {
-	Status string   `json:"status"` // pass, live, fail, missing
+	Status string   `json:"status"` // pass, live, fail, missing, extra
 	Kinds  []string `json:"kinds,omitempty"`
 	Diff   []string `json:"diff,omitempty"`
 }
@@ -301,22 +310,34 @@ func cmdCheck(args []string) error {
 	return nil
 }
 
-// runCheck lines up the golden steps with the session steps by input. A session step that the golden file does
-// not list is not checked; a golden step that the session does not have fails. In a step, the golden screens pair
-// with the session's screens in order, and extra session screens are not checked.
+// runCheck finds the session step of each golden step: the nth step with its input, or, with no nth, the next one
+// in order by input. A session step that the golden file does not list is not checked; a golden step that the
+// session does not have fails. In a step, the golden screens pair with the session's screens in order, and a
+// screen that the golden step does not list fails as extra.
 func runCheck(g golden, steps []step, live liveMask) checkResult {
-	gsteps := make([]step, len(g.Steps))
+	matched := make([]*step, len(g.Steps))
+	byInput := map[string][]*step{}
+	for i := range steps {
+		byInput[steps[i].Input] = append(byInput[steps[i].Input], &steps[i])
+	}
+	var inOrder []step
 	for i, s := range g.Steps {
-		gsteps[i] = step{N: i, Input: s.Input}
+		if s.Nth == 0 {
+			inOrder = append(inOrder, step{N: i, Input: s.Input})
+		} else if occ := byInput[s.Input]; s.Nth <= len(occ) {
+			matched[i] = occ[s.Nth-1]
+		}
+	}
+	for _, ab := range alignSteps(inOrder, steps) {
+		if ab[0] != nil {
+			matched[ab[0].N] = ab[1]
+		}
 	}
 	res := checkResult{Passed: true}
-	for _, ab := range alignSteps(gsteps, steps) {
-		if ab[0] == nil {
-			continue
-		}
-		gs := g.Steps[ab[0].N]
+	for gi, gs := range g.Steps {
+		got := matched[gi]
 		out := checkStepOut{Input: gs.Input, Status: "pass", Screens: []checkScreenOut{}}
-		if ab[1] == nil {
+		if got == nil {
 			out.Status, res.Passed = "missing", false
 			res.Steps = append(res.Steps, out)
 			continue
@@ -327,10 +348,10 @@ func runCheck(g golden, steps []step, live liveMask) checkResult {
 			if gsc.Emoji == "loose" || (gsc.Emoji == "" && g.Emoji == "loose") {
 				sl = append(append(liveMask{}, looseEmoji...), live...)
 			}
-			if i >= len(ab[1].Screens) {
+			if i >= len(got.Screens) {
 				so.Status = "missing"
 			} else {
-				st := ab[1].Screens[i].State
+				st := got.Screens[i].State
 				so.Kinds = checkKinds(gsc, st, sl)
 				switch {
 				case len(so.Kinds) == 1 && so.Kinds[0] == "live":
@@ -351,6 +372,11 @@ func runCheck(g golden, steps []step, live liveMask) checkResult {
 				out.Status, res.Passed = "fail", false
 			}
 			out.Screens = append(out.Screens, so)
+		}
+		for _, sc := range got.Screens[min(len(gs.Screens), len(got.Screens)):] {
+			first, _, _ := strings.Cut(sc.State.Text, "\n")
+			out.Screens = append(out.Screens, checkScreenOut{Status: "extra", Diff: []string{"+ " + first}})
+			out.Status, res.Passed = "fail", false
 		}
 		res.Steps = append(res.Steps, out)
 	}

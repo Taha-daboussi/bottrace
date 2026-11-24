@@ -9,15 +9,7 @@ import (
 
 func goldenOf(t *testing.T, s *sessionBuilder) golden {
 	t.Helper()
-	g := golden{}
-	for _, st := range buildSteps(s.evs) {
-		gs := goldenStep{Input: st.Input}
-		for _, sc := range st.Screens {
-			gs.Screens = append(gs.Screens, goldenFromState(sc.State))
-		}
-		g.Steps = append(g.Steps, gs)
-	}
-	b, err := json.Marshal(g)
+	b, err := json.Marshal(golden{Steps: snapshotSteps(s.evs, nil)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,5 +103,31 @@ func TestBarePageHasOnlyTheMessage(t *testing.T) {
 	}
 	if !strings.Contains(page, "Guardrails") || !strings.Contains(page, "Gas Limits") {
 		t.Fatal("bare page misses the message")
+	}
+}
+
+func TestCheckFailsOnAnExtraScreen(t *testing.T) {
+	g := goldenOf(t, guardSession(t, "", "goto:gas"))
+	s := guardSession(t, "", "goto:gas")
+	s.draw("sendMessage", msg(t, 11, "New message", nil))
+	res := runCheck(g, buildSteps(s.evs), nil)
+	if res.Passed || res.Steps[1].Status != "fail" || res.Steps[1].Screens[1].Status != "extra" {
+		t.Fatalf("want an extra screen fail: %+v", res)
+	}
+}
+
+func TestNthPicksTheRightRepeat(t *testing.T) {
+	s := &sessionBuilder{t: t}
+	s.send("/start")
+	s.draw("sendMessage", home(t, 10, "first"))
+	s.send("/start")
+	s.draw("sendMessage", home(t, 11, "second"))
+	g := goldenOf(t, s)
+	g.Steps = g.Steps[1:]
+	if g.Steps[0].Nth != 2 {
+		t.Fatalf("snapshot should write nth 2, got %d", g.Steps[0].Nth)
+	}
+	if res := runCheck(g, buildSteps(s.evs), nil); !res.Passed {
+		t.Fatalf("the second /start must be checked against the second: %+v", res)
 	}
 }
