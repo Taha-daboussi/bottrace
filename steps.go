@@ -426,9 +426,15 @@ func alignSteps(a, b []step) [][2]*step {
 	return out
 }
 
-// lineDiffBy is lineDiff with equality on keys: two lines with the same key and different text are shown as
-// "~ old → new" (a live value), not as a removed and an added line.
-func lineDiffBy(a, b, ka, kb []string) []string {
+// diffOp is one line of a line diff: ' ' same, '-' only in a, '+' only in b, '~' the same key with a new text.
+type diffOp struct {
+	Op   byte
+	A, B string
+}
+
+// diffOps is a longest common subsequence line diff with equality on keys: two lines with the same key and
+// different text (a live value) are one '~' op, not a removed and an added line.
+func diffOps(a, b, ka, kb []string) []diffOp {
 	n, m := len(a), len(b)
 	dp := make([][]int, n+1)
 	for i := range dp {
@@ -443,31 +449,50 @@ func lineDiffBy(a, b, ka, kb []string) []string {
 			}
 		}
 	}
-	var out []string
+	var out []diffOp
 	i, j := 0, 0
 	for i < n && j < m {
 		switch {
 		case ka[i] == kb[j]:
-			if a[i] == b[j] {
-				out = append(out, "  "+b[j])
-			} else {
-				out = append(out, "~ "+a[i]+"  →  "+b[j])
+			op := byte(' ')
+			if a[i] != b[j] {
+				op = '~'
 			}
+			out = append(out, diffOp{op, a[i], b[j]})
 			i++
 			j++
 		case dp[i+1][j] >= dp[i][j+1]:
-			out = append(out, "- "+a[i])
+			out = append(out, diffOp{'-', a[i], ""})
 			i++
 		default:
-			out = append(out, "+ "+b[j])
+			out = append(out, diffOp{'+', "", b[j]})
 			j++
 		}
 	}
 	for ; i < n; i++ {
-		out = append(out, "- "+a[i])
+		out = append(out, diffOp{'-', a[i], ""})
 	}
 	for ; j < m; j++ {
-		out = append(out, "+ "+b[j])
+		out = append(out, diffOp{'+', "", b[j]})
+	}
+	return out
+}
+
+// lineDiffBy is diffOps as text lines: "  same", "- old", "+ new", "~ old  →  new".
+func lineDiffBy(a, b, ka, kb []string) []string {
+	ops := diffOps(a, b, ka, kb)
+	out := make([]string, len(ops))
+	for i, o := range ops {
+		switch o.Op {
+		case ' ':
+			out[i] = "  " + o.B
+		case '~':
+			out[i] = "~ " + o.A + "  →  " + o.B
+		case '-':
+			out[i] = "- " + o.A
+		default:
+			out[i] = "+ " + o.B
+		}
 	}
 	return out
 }
