@@ -188,6 +188,10 @@ func TestChangeKinds(t *testing.T) {
 		{"live", func(s *msgState) { s.Text = "Hi ⭐ $6" }, "money", []string{"live"}},
 		{"format", func(s *msgState) { s.Entities[0].Type = "underline" }, "", []string{"format"}},
 		{"emoji", func(s *msgState) { s.Entities[1].Emoji = "222" }, "", []string{"emoji"}},
+		{"emoji id is not a live number", func(s *msgState) { s.Entities[1].Emoji = "222" }, "number", []string{"emoji"}},
+		{"link target is not a live number", func(s *msgState) {
+			s.Entities = append(s.Entities, entity{Type: "text_link", Offset: 5, Length: 2, URL: "https://t.me/bot4"})
+		}, "number", []string{"format"}},
 		{"callback", func(s *msgState) { s.Rows[0][1].Data = "x" }, "", []string{"callback"}},
 		{"style", func(s *msgState) { s.Rows[1][0].Style = "danger" }, "", []string{"style"}},
 		{"icon", func(s *msgState) { s.Rows[0][0].Icon = "8" }, "", []string{"icon"}},
@@ -209,6 +213,22 @@ func TestChangeKinds(t *testing.T) {
 				t.Fatalf("got %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+func TestApplyLineKeepsTargetsAndIds(t *testing.T) {
+	live, _ := parseLive("number", nil)
+	cases := map[string]string{
+		"  1.2 Sell 50% → sell:12 · icon 77":        "  1.2 Sell #% → sell:12 · icon 77",
+		"<emoji 5767>⚡</emoji> <bold>$5.07</bold>":  "<emoji 5767>⚡</emoji> <bold>$#</bold>",
+		`<a https://t.me/bot4?start=9>Add</a> 10 x`: `<a https://t.me/bot4?start=9>Add</a> # x`,
+		"[photo AQAD12]":       "[photo AQAD12]",
+		"[ Sell 50% ] [ Buy ]": "[ Sell #% ] [ Buy ]",
+	}
+	for in, want := range cases {
+		if got := live.applyLine(in); got != want {
+			t.Errorf("applyLine(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

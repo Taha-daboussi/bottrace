@@ -151,6 +151,41 @@ func (m liveMask) apply(s string) string {
 	return s
 }
 
+var markupTag = regexp.MustCompile(`</?(bold|italic|underline|strikethrough|spoiler|code|pre|quote)>|<emoji \d+>|</emoji>|<a [^>]*>|</a>`)
+
+// applyMarkup masks the visible text of a markup string and keeps its tags: an emoji id or a link target is not
+// a live value.
+func (m liveMask) applyMarkup(s string) string {
+	if len(m) == 0 {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for _, loc := range markupTag.FindAllStringIndex(s, -1) {
+		b.WriteString(m.apply(s[last:loc[0]]))
+		b.WriteString(s[loc[0]:loc[1]])
+		last = loc[1]
+	}
+	b.WriteString(m.apply(s[last:]))
+	return b.String()
+}
+
+var buttonLine = regexp.MustCompile(`^(  \d+\.\d+ )(.*?)( → .*)$`)
+
+// applyLine masks one line of fullGrid: the label of a button line, not its target or icon; the media line not at all.
+func (m liveMask) applyLine(l string) string {
+	if len(m) == 0 {
+		return l
+	}
+	if p := buttonLine.FindStringSubmatch(l); p != nil {
+		return p[1] + m.apply(p[2]) + p[3]
+	}
+	if strings.HasPrefix(l, "[") && !strings.HasPrefix(l, "[ ") {
+		return l
+	}
+	return m.applyMarkup(l)
+}
+
 // markup is the text with its formatting as tags; withEmoji adds the id of each custom emoji.
 func markup(st msgState, withEmoji bool) string {
 	if st.Raw {
@@ -249,10 +284,10 @@ func changeKinds(a, b msgState, live liveMask) []string {
 		}
 	}
 	if a.Text == b.Text || live.apply(a.Text) == live.apply(b.Text) {
-		ma, mb := live.apply(markup(a, false)), live.apply(markup(b, false))
+		ma, mb := live.applyMarkup(markup(a, false)), live.applyMarkup(markup(b, false))
 		if ma != mb {
 			set["format"] = true
-		} else if live.apply(markup(a, true)) != live.apply(markup(b, true)) {
+		} else if live.applyMarkup(markup(a, true)) != live.applyMarkup(markup(b, true)) {
 			set["emoji"] = true
 		}
 	}

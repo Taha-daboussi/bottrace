@@ -238,7 +238,7 @@ func cmdDiff(args []string) error {
 func maskAll(lines []string, live liveMask) []string {
 	out := make([]string, len(lines))
 	for i, l := range lines {
-		out[i] = live.apply(l)
+		out[i] = live.applyLine(l)
 	}
 	return out
 }
